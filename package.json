@@ -1,0 +1,21 @@
+{
+  "name": "ai-cli",
+  "version": "0.1.0",
+  "description": "AI CLI tool that orchestrates Claude Code and Codex for high-quality code generation",
+  "type": "module",
+  "scripts": {
+    "build": "bun build --compile --minify src/index.ts --outfile dist/ai",
+    "build:check": "tsc --noEmit",
+    "dev": "bun run src/index.ts",
+    "test": "vitest run",
+    "test:watch": "vitest"
+  },
+  "dependencies": {
+    "commander": "^13.1.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.13.4",
+    "typescript": "^5.7.3",
+    "vitest": "^3.0.6"
+  }
+}
