@@ -115,8 +115,32 @@ async function runClaudeWithFormat(
   const lineBuffer = new StreamJsonLineBuffer();
   const allEvents: StreamJsonEvent[] = [];
   let prevEmittedLength = 0;
+  let prevExtractedText = "";
   let hasEmittedText = false;
   let lastEmittedEndsWithNewline = false;
+
+  const processEvent = (event: StreamJsonEvent) => {
+    const currentText = extractTextFromEvent(event);
+    if (currentText === null) return;
+
+    // テキストの連続性を判定: 前回テキストの prefix でなければ内容変化
+    if (prevExtractedText !== "" && !currentText.startsWith(prevExtractedText)) {
+      // 新セクション開始: 改行セパレータを挿入
+      options.onStdout?.("\n");
+      hasEmittedText = true;
+      lastEmittedEndsWithNewline = true;
+      prevEmittedLength = 0;
+    }
+
+    const delta = currentText.slice(prevEmittedLength);
+    if (delta.length > 0) {
+      options.onStdout?.(delta);
+      prevEmittedLength = currentText.length;
+      hasEmittedText = true;
+      lastEmittedEndsWithNewline = delta.endsWith("\n");
+    }
+    prevExtractedText = currentText;
+  };
 
   const result = await runCli("claude", {
     args: streamArgs,
@@ -124,23 +148,8 @@ async function runClaudeWithFormat(
     onStdout: (chunk: string) => {
       const events = lineBuffer.feed(chunk);
       allEvents.push(...events);
-
       for (const event of events) {
-        const currentText = extractTextFromEvent(event);
-        if (currentText === null) continue;
-
-        // 縮退ガード: テキスト長が減った場合はリセット
-        if (currentText.length < prevEmittedLength) {
-          prevEmittedLength = 0;
-        }
-
-        const delta = currentText.slice(prevEmittedLength);
-        if (delta.length > 0) {
-          options.onStdout?.(delta);
-          prevEmittedLength = currentText.length;
-          hasEmittedText = true;
-          lastEmittedEndsWithNewline = delta.endsWith("\n");
-        }
+        processEvent(event);
       }
     },
     onStderr: options.onStderr,
@@ -150,18 +159,7 @@ async function runClaudeWithFormat(
   const remaining = lineBuffer.flush();
   allEvents.push(...remaining);
   for (const event of remaining) {
-    const currentText = extractTextFromEvent(event);
-    if (currentText === null) continue;
-    if (currentText.length < prevEmittedLength) {
-      prevEmittedLength = 0;
-    }
-    const delta = currentText.slice(prevEmittedLength);
-    if (delta.length > 0) {
-      options.onStdout?.(delta);
-      prevEmittedLength = currentText.length;
-      hasEmittedText = true;
-      lastEmittedEndsWithNewline = delta.endsWith("\n");
-    }
+    processEvent(event);
   }
 
   // ストリーミング出力が改行で終わっていない場合、改行を追加（後続の表示との分離）

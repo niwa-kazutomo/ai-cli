@@ -343,8 +343,8 @@ describe("ストリーミングモード", () => {
       onStdout: (chunk: string) => receivedChunks.push(chunk),
     });
 
-    // 1回目: "Long text here", 2回目: "Short"（リセット後に全文再出力）, 末尾改行
-    expect(receivedChunks).toEqual(["Long text here", "Short", "\n"]);
+    // 1回目: "Long text here", 内容変化で "\n" セパレータ, 2回目: "Short", 末尾改行
+    expect(receivedChunks).toEqual(["Long text here", "\n", "Short", "\n"]);
   });
 
   it("末尾改行なしの最終 assistant イベントが onStdout に流れる", async () => {
@@ -409,8 +409,53 @@ describe("ストリーミングモード", () => {
       streaming: true,
       onStdout: (chunk: string) => receivedChunks.push(chunk),
     });
-    // 縮退でリセット後も hasEmittedText = true なので末尾 "\n" が追加される
-    expect(receivedChunks).toEqual(["First", "AB", "\n"]);
+    // 内容変化で "\n" セパレータ挿入後、"AB" が出力され、末尾改行
+    expect(receivedChunks).toEqual(["First", "\n", "AB", "\n"]);
+  });
+
+  it("同じ長さのテキストに内容が変わった場合でも改行セパレータが挿入される", async () => {
+    const receivedChunks: string[] = [];
+    runCliMock.mockImplementation((_cmd: string, opts: { args: string[]; onStdout?: (chunk: string) => void }) => {
+      opts.onStdout?.('{"type":"system","session_id":"sess-samelen"}\n');
+      // Event 1: "ABCDE" (5文字), Event 2: "FGHIJ" (5文字) — 長さ同一だが内容変化
+      opts.onStdout?.('{"type":"assistant","message":{"content":[{"type":"text","text":"ABCDE"}]}}\n');
+      opts.onStdout?.('{"type":"assistant","message":{"content":[{"type":"text","text":"FGHIJ"}]}}\n');
+      opts.onStdout?.('{"type":"result","result":"FGHIJ","session_id":"sess-samelen"}\n');
+      return Promise.resolve({ exitCode: 0, stdout: "", stderr: "" });
+    });
+    const { generatePlan } = await import("../src/claude-code.js");
+    const session = { claudeSessionId: null, claudeFirstRun: true, codexSessionId: null, codexFirstRun: true };
+    await generatePlan(session, "test", {
+      cwd: "/tmp",
+      streaming: true,
+      onStdout: (chunk: string) => receivedChunks.push(chunk),
+    });
+    // "ABCDE" → 内容変化 "\n" セパレータ → "FGHIJ" → 末尾改行
+    expect(receivedChunks).toEqual(["ABCDE", "\n", "FGHIJ", "\n"]);
+  });
+
+  it("tool_use 後に新テキストブロックが始まる場合に改行セパレータを挿入する", async () => {
+    const receivedChunks: string[] = [];
+    runCliMock.mockImplementation((_cmd: string, opts: { args: string[]; onStdout?: (chunk: string) => void }) => {
+      opts.onStdout?.('{"type":"system","session_id":"sess-tooluse"}\n');
+      // Event 1: テキスト "Before"
+      opts.onStdout?.('{"type":"assistant","message":{"content":[{"type":"text","text":"Before"}]}}\n');
+      // Event 2: テキスト "Before" + tool_use（extractTextFromEvent は "Before" を返す）
+      opts.onStdout?.('{"type":"assistant","message":{"content":[{"type":"text","text":"Before"},{"type":"tool_use","id":"t1","name":"bash","input":{}}]}}\n');
+      // Event 3: 新セクション "After"（tool_use 後にコンテンツ配列がリセットされた）
+      opts.onStdout?.('{"type":"assistant","message":{"content":[{"type":"text","text":"After"}]}}\n');
+      opts.onStdout?.('{"type":"result","result":"Before\\nAfter","session_id":"sess-tooluse"}\n');
+      return Promise.resolve({ exitCode: 0, stdout: "", stderr: "" });
+    });
+    const { generatePlan } = await import("../src/claude-code.js");
+    const session = { claudeSessionId: null, claudeFirstRun: true, codexSessionId: null, codexFirstRun: true };
+    await generatePlan(session, "test", {
+      cwd: "/tmp",
+      streaming: true,
+      onStdout: (chunk: string) => receivedChunks.push(chunk),
+    });
+    // "Before" → (Event 2 は変化なし) → 内容変化 "\n" → "After" → 末尾改行
+    expect(receivedChunks).toEqual(["Before", "\n", "After", "\n"]);
   });
 
   it("streaming: false で json 経路が正常動作する（クラッシュしない）", async () => {
