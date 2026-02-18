@@ -94,7 +94,22 @@ describe("extractTextFromEvent", () => {
         ],
       },
     };
-    expect(extractTextFromEvent(event)).toBe("Hello World");
+    expect(extractTextFromEvent(event)).toBe("Hello \nWorld");
+  });
+
+  it("tool_use を挟む複数 text ブロックを改行で結合する", () => {
+    const event: StreamJsonEvent = {
+      type: "assistant",
+      message: {
+        content: [
+          { type: "text", text: "Before tool" },
+          { type: "tool_use", id: "t1", name: "read_file", input: {} },
+          { type: "tool_result", tool_use_id: "t1", content: "file data" },
+          { type: "text", text: "After tool" },
+        ],
+      },
+    };
+    expect(extractTextFromEvent(event)).toBe("Before tool\nAfter tool");
   });
 
   it("text ブロックがない assistant イベントは null を返す", () => {

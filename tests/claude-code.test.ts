@@ -300,8 +300,8 @@ describe("ストリーミングモード", () => {
       onStdout: (chunk: string) => receivedChunks.push(chunk),
     });
 
-    // 1回目: "Hello", 2回目: " World" (差分のみ)
-    expect(receivedChunks).toEqual(["Hello", " World"]);
+    // 1回目: "Hello", 2回目: " World" (差分のみ), 末尾改行
+    expect(receivedChunks).toEqual(["Hello", " World", "\n"]);
   });
 
   it("テキスト長縮退時に prevEmittedLength がリセットされる", async () => {
@@ -330,8 +330,8 @@ describe("ストリーミングモード", () => {
       onStdout: (chunk: string) => receivedChunks.push(chunk),
     });
 
-    // 1回目: "Long text here", 2回目: "Short"（リセット後に全文再出力）
-    expect(receivedChunks).toEqual(["Long text here", "Short"]);
+    // 1回目: "Long text here", 2回目: "Short"（リセット後に全文再出力）, 末尾改行
+    expect(receivedChunks).toEqual(["Long text here", "Short", "\n"]);
   });
 
   it("末尾改行なしの最終 assistant イベントが onStdout に流れる", async () => {
@@ -354,10 +354,50 @@ describe("ストリーミングモード", () => {
       onStdout: (chunk: string) => receivedChunks.push(chunk),
     });
 
-    // flush() 経由でも onStdout に差分が転送されること
-    expect(receivedChunks).toEqual(["Hello"]);
+    // flush() 経由でも onStdout に差分が転送されること + 末尾改行
+    expect(receivedChunks).toEqual(["Hello", "\n"]);
     expect(result.response).toBe("Hello");
     expect(session.claudeSessionId).toBe("sess-noeol");
+  });
+
+  it("最終差分が改行で終わる場合は末尾改行を追加しない", async () => {
+    const receivedChunks: string[] = [];
+    runCliMock.mockImplementation((_cmd: string, opts: { args: string[]; onStdout?: (chunk: string) => void }) => {
+      opts.onStdout?.('{"type":"system","session_id":"sess-nl"}\n');
+      opts.onStdout?.('{"type":"assistant","message":{"content":[{"type":"text","text":"Done\\n"}]}}\n');
+      opts.onStdout?.('{"type":"result","result":"Done\\n","session_id":"sess-nl"}\n');
+      return Promise.resolve({ exitCode: 0, stdout: "", stderr: "" });
+    });
+    const { generatePlan } = await import("../src/claude-code.js");
+    const session = { claudeSessionId: null, claudeFirstRun: true, codexSessionId: null, codexFirstRun: true };
+    await generatePlan(session, "test", {
+      cwd: "/tmp",
+      streaming: true,
+      onStdout: (chunk: string) => receivedChunks.push(chunk),
+    });
+    // "Done\n" のみ。末尾に余分な "\n" が追加されないこと
+    expect(receivedChunks).toEqual(["Done\n"]);
+  });
+
+  it("テキスト縮退後も末尾改行が付与される", async () => {
+    const receivedChunks: string[] = [];
+    runCliMock.mockImplementation((_cmd: string, opts: { args: string[]; onStdout?: (chunk: string) => void }) => {
+      opts.onStdout?.('{"type":"system","session_id":"sess-shrink2"}\n');
+      // テキスト emit → 縮退（prevEmittedLength が 0 にリセット）→ 短いテキスト再 emit
+      opts.onStdout?.('{"type":"assistant","message":{"content":[{"type":"text","text":"First"}]}}\n');
+      opts.onStdout?.('{"type":"assistant","message":{"content":[{"type":"text","text":"AB"}]}}\n');
+      opts.onStdout?.('{"type":"result","result":"AB","session_id":"sess-shrink2"}\n');
+      return Promise.resolve({ exitCode: 0, stdout: "", stderr: "" });
+    });
+    const { generatePlan } = await import("../src/claude-code.js");
+    const session = { claudeSessionId: null, claudeFirstRun: true, codexSessionId: null, codexFirstRun: true };
+    await generatePlan(session, "test", {
+      cwd: "/tmp",
+      streaming: true,
+      onStdout: (chunk: string) => receivedChunks.push(chunk),
+    });
+    // 縮退でリセット後も hasEmittedText = true なので末尾 "\n" が追加される
+    expect(receivedChunks).toEqual(["First", "AB", "\n"]);
   });
 
   it("streaming: false で json 経路が正常動作する（クラッシュしない）", async () => {

@@ -115,6 +115,8 @@ async function runClaudeWithFormat(
   const lineBuffer = new StreamJsonLineBuffer();
   const allEvents: StreamJsonEvent[] = [];
   let prevEmittedLength = 0;
+  let hasEmittedText = false;
+  let lastEmittedEndsWithNewline = false;
 
   const result = await runCli("claude", {
     args: streamArgs,
@@ -136,6 +138,8 @@ async function runClaudeWithFormat(
         if (delta.length > 0) {
           options.onStdout?.(delta);
           prevEmittedLength = currentText.length;
+          hasEmittedText = true;
+          lastEmittedEndsWithNewline = delta.endsWith("\n");
         }
       }
     },
@@ -155,7 +159,14 @@ async function runClaudeWithFormat(
     if (delta.length > 0) {
       options.onStdout?.(delta);
       prevEmittedLength = currentText.length;
+      hasEmittedText = true;
+      lastEmittedEndsWithNewline = delta.endsWith("\n");
     }
+  }
+
+  // ストリーミング出力が改行で終わっていない場合、改行を追加（後続の表示との分離）
+  if (hasEmittedText && !lastEmittedEndsWithNewline) {
+    options.onStdout?.("\n");
   }
 
   const streamResult = extractFromStreamEvents(allEvents);

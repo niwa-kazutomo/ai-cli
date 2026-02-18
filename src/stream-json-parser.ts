@@ -83,7 +83,7 @@ export function extractTextFromEvent(event: StreamJsonEvent): string | null {
   }
 
   // eslint-disable-next-line prefer-template
-  return texts.length > 0 ? texts.join("") : null;
+  return texts.length > 0 ? texts.join("\n") : null;
 }
 
 /**
