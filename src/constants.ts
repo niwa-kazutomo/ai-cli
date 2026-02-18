@@ -1,17 +1,14 @@
 export const REPL_PROMPT = "ai> ";
 export const REPL_MESSAGES = {
   WELCOME: (version: string) =>
-    `\n🤖 AI CLI v${version} - インタラクティブモード\nプロンプトを入力してください。終了: "exit" / "quit" / Ctrl+D\n\n`,
+    `\n🤖 AI CLI v${version}\nプロンプトを入力してください。終了: "exit" / "quit" / Ctrl+D\n\n`,
   GOODBYE: "👋 終了します。",
   NEXT_PROMPT: "次のプロンプトを入力してください。",
 } as const;
 
 export const DEFAULT_TIMEOUT_MS = 10 * 60 * 1000; // 10 minutes
-export const DEFAULT_MAX_PLAN_ITERATIONS = 5;
-export const DEFAULT_MAX_CODE_ITERATIONS = 5;
-export const LOG_TRUNCATE_HEAD = 300;
-export const LOG_TRUNCATE_TAIL = 100;
-
+export const DEFAULT_MAX_PLAN_ITERATIONS = 10;
+export const DEFAULT_MAX_CODE_ITERATIONS = 10;
 export const BLOCKER_SEVERITIES = new Set(["P0", "P1", "P2", "P3"]);
 
 export const PROMPTS = {
@@ -19,7 +16,7 @@ export const PROMPTS = {
     `以下の要件に基づいて、実装計画を作成してください。コードは書かず、計画のみを出力してください。\n\n${userPrompt}`,
 
   PLAN_REVISION: (concerns: string, userAnswers?: string) => {
-    let prompt = `以下のレビュー指摘事項に基づいて、計画を修正してください。コードは書かず、修正した計画のみを出力してください。\n\n## レビュー指摘事項\n${concerns}`;
+    let prompt = `以下のレビュー指摘事項に基づいて、計画を修正してください。コードは書かず、修正後の計画を最初から最後まで省略せずに全文出力してください。変更箇所の差分だけでなく、計画全体を出力してください。\n\n## レビュー指摘事項\n${concerns}`;
     if (userAnswers) {
       prompt += `\n\n## ユーザーからの回答\n${userAnswers}`;
     }
@@ -72,12 +69,11 @@ ${reviewOutput}`,
 } as const;
 
 export const MESSAGES = {
-  CODE_GEN_CONFIRM: `⚠ コード生成を開始します。Claude Code がファイルの作成・編集を行います。\n続行しますか？ (yes/no): `,
-  PLAN_APPROVE: `上記の計画で進めてよろしいですか？ (yes/no): `,
+  PLAN_APPROVE: `上記の計画で進めてよろしいですか？ (y/n): `,
   LOOP_LIMIT_WARNING: (phase: string, max: number) =>
     `⚠ ${phase}のレビューループが上限（${max}回）に達しました。`,
-  UNRESOLVED_CONCERNS_CONTINUE: `未解消の懸念事項があります。このまま続行しますか？ (yes/no): `,
-  UNRESOLVED_CONCERNS_FINISH: `未解消の懸念事項があります。このまま完了してよいですか？ (yes/no): `,
+  UNRESOLVED_CONCERNS_CONTINUE: `未解消の懸念事項があります。このまま続行しますか？ (y/n): `,
+  UNRESOLVED_CONCERNS_FINISH: `未解消の懸念事項があります。このまま完了してよいですか？ (y/n): `,
   WORKFLOW_ABORTED: `ワークフローを中止しました。`,
   WORKFLOW_COMPLETE: `✅ コード生成が完了しました。`,
   NO_GIT_REPO: `エラー: 現在のディレクトリは Git リポジトリ内ではありません。コードレビューには Git リポジトリが必要です。`,

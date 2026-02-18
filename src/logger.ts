@@ -1,4 +1,3 @@
-import { LOG_TRUNCATE_HEAD, LOG_TRUNCATE_TAIL } from "./constants.js";
 import type { LogLevel } from "./types.js";
 
 let currentVerbose = false;
@@ -10,16 +9,6 @@ export function configureLogger(options: {
 }): void {
   currentVerbose = options.verbose;
   currentDebug = options.debug;
-}
-
-function truncate(text: string): string {
-  if (text.length <= LOG_TRUNCATE_HEAD + LOG_TRUNCATE_TAIL + 20) {
-    return text;
-  }
-  const head = text.slice(0, LOG_TRUNCATE_HEAD);
-  const tail = text.slice(-LOG_TRUNCATE_TAIL);
-  const omitted = text.length - LOG_TRUNCATE_HEAD - LOG_TRUNCATE_TAIL;
-  return `${head}\n... (${omitted} 文字省略) ...\n${tail}`;
 }
 
 function write(level: LogLevel, message: string): void {
@@ -42,8 +31,7 @@ export function error(message: string): void {
 export function verbose(message: string, content?: string): void {
   if (!currentVerbose && !currentDebug) return;
   if (content) {
-    const displayContent = currentDebug ? content : truncate(content);
-    write("verbose", `${message}\n${displayContent}`);
+    write("verbose", `${message}\n${content}`);
   } else {
     write("verbose", message);
   }

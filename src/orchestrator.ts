@@ -221,13 +221,6 @@ export async function runWorkflow(options: OrchestratorOptions): Promise<void> {
     return;
   }
 
-  // Code generation confirmation
-  const codeConfirmed = await ui.confirmYesNo(MESSAGES.CODE_GEN_CONFIRM);
-  if (!codeConfirmed) {
-    ui.display(MESSAGES.WORKFLOW_ABORTED);
-    return;
-  }
-
   // ===== Code Phase =====
   ui.displaySeparator();
   ui.display("💻 Step 4: コード生成を開始します...");
