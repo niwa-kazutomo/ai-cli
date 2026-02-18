@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { extractResponse, checkGitRepo, checkGitChanges, reviewPlan, reviewCode } from "../src/codex.js";
+import { extractResponse, checkGitRepo, checkGitChanges, getGitDiff, reviewPlan, reviewCode } from "../src/codex.js";
 import type { SessionState } from "../src/types.js";
 
 describe("extractResponse", () => {
@@ -290,7 +290,7 @@ describe("reviewCode streaming", () => {
       return { exitCode: 0, stdout: line, stderr: "" };
     });
 
-    const result = await reviewCode({
+    const result = await reviewCode("review prompt", {
       cwd: "/tmp",
       streaming: true,
       onStdout: (chunk) => chunks.push(chunk),
@@ -298,5 +298,120 @@ describe("reviewCode streaming", () => {
 
     expect(result.response).toBe("Review done");
     expect(chunks.join("")).toBe("Review done");
+  });
+
+  it("codex exec --sandbox read-only --json とプロンプトが引数に渡される", async () => {
+    mockRunCli.mockImplementation(async (_cmd, opts) => {
+      const line = JSON.stringify({ type: "item.completed", item: { id: "item_1", type: "agent_message", text: "ok" } }) + "\n";
+      opts.onStdout?.(line);
+      return { exitCode: 0, stdout: line, stderr: "" };
+    });
+
+    await reviewCode("my review prompt", {
+      cwd: "/tmp",
+      streaming: true,
+      onStdout: () => {},
+    });
+
+    const callArgs = mockRunCli.mock.calls[0][1].args;
+    expect(callArgs).toContain("--sandbox");
+    expect(callArgs).toContain("read-only");
+    expect(callArgs).toContain("--json");
+    expect(callArgs).toContain("my review prompt");
+    expect(callArgs).not.toContain("review");
+    expect(callArgs).not.toContain("--uncommitted");
+  });
+});
+
+describe("getGitDiff", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it("staged + unstaged の diff を結合する", async () => {
+    mockRunCli
+      // unstaged (git diff)
+      .mockResolvedValueOnce({ exitCode: 0, stdout: "unstaged diff", stderr: "" })
+      // staged (git diff --cached)
+      .mockResolvedValueOnce({ exitCode: 0, stdout: "staged diff", stderr: "" })
+      // untracked (git ls-files)
+      .mockResolvedValueOnce({ exitCode: 0, stdout: "", stderr: "" });
+
+    const result = await getGitDiff("/tmp");
+
+    expect(result).toContain("## Staged Changes");
+    expect(result).toContain("staged diff");
+    expect(result).toContain("## Unstaged Changes");
+    expect(result).toContain("unstaged diff");
+  });
+
+  it("untracked ファイルの差分が含まれる（exitCode=1 を正常扱い）", async () => {
+    mockRunCli
+      // unstaged
+      .mockResolvedValueOnce({ exitCode: 0, stdout: "", stderr: "" })
+      // staged
+      .mockResolvedValueOnce({ exitCode: 0, stdout: "", stderr: "" })
+      // untracked list
+      .mockResolvedValueOnce({ exitCode: 0, stdout: "new-file.ts\n", stderr: "" })
+      // git diff --no-index for new-file.ts (exitCode=1 is normal)
+      .mockResolvedValueOnce({ exitCode: 1, stdout: "diff --git a/dev/null b/new-file.ts\n+content", stderr: "" });
+
+    const result = await getGitDiff("/tmp");
+
+    expect(result).toContain("## Untracked Files");
+    expect(result).toContain("new-file.ts");
+  });
+
+  it("untracked ファイルが MAX_UNTRACKED_FILES を超える場合に打ち切り・省略メッセージが出る", async () => {
+    const files = Array.from({ length: 55 }, (_, i) => `file-${i}.ts`).join("\n");
+
+    mockRunCli
+      // unstaged
+      .mockResolvedValueOnce({ exitCode: 0, stdout: "", stderr: "" })
+      // staged
+      .mockResolvedValueOnce({ exitCode: 0, stdout: "", stderr: "" })
+      // untracked list
+      .mockResolvedValueOnce({ exitCode: 0, stdout: files, stderr: "" });
+
+    // Mock 50 diff calls (MAX_UNTRACKED_FILES)
+    for (let i = 0; i < 50; i++) {
+      mockRunCli.mockResolvedValueOnce({ exitCode: 1, stdout: `diff for file-${i}`, stderr: "" });
+    }
+
+    const result = await getGitDiff("/tmp");
+
+    expect(result).toContain("50/55 files, remaining omitted");
+    // file-50 以降は処理されていない
+    expect(result).not.toContain("diff for file-50");
+  });
+
+  it("maxLength 超過時に切り詰められる", async () => {
+    const longDiff = "x".repeat(60_000);
+    mockRunCli
+      // unstaged
+      .mockResolvedValueOnce({ exitCode: 0, stdout: longDiff, stderr: "" })
+      // staged
+      .mockResolvedValueOnce({ exitCode: 0, stdout: "", stderr: "" })
+      // untracked
+      .mockResolvedValueOnce({ exitCode: 0, stdout: "", stderr: "" });
+
+    const result = await getGitDiff("/tmp", 100);
+
+    expect(result.length).toBeLessThan(200);
+    expect(result).toContain("差分が長すぎるため省略されました");
+  });
+
+  it("全 git コマンド失敗時に空文字を返す", async () => {
+    mockRunCli
+      // unstaged
+      .mockResolvedValueOnce({ exitCode: 1, stdout: "", stderr: "error" })
+      // staged
+      .mockResolvedValueOnce({ exitCode: 1, stdout: "", stderr: "error" })
+      // untracked
+      .mockResolvedValueOnce({ exitCode: 1, stdout: "", stderr: "error" });
+
+    const result = await getGitDiff("/tmp");
+
+    expect(result).toBe("");
   });
 });

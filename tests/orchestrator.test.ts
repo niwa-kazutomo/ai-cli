@@ -17,6 +17,7 @@ vi.mock("../src/codex.js", () => ({
   reviewCode: vi.fn(),
   checkGitRepo: vi.fn().mockResolvedValue(true),
   checkGitChanges: vi.fn().mockResolvedValue(true),
+  getGitDiff: vi.fn().mockResolvedValue("mock diff content"),
 }));
 
 vi.mock("../src/review-judge.js", () => ({
@@ -78,6 +79,7 @@ describe("orchestrator", () => {
     vi.clearAllMocks();
     mockCodex.checkGitRepo.mockResolvedValue(true);
     mockCodex.checkGitChanges.mockResolvedValue(true);
+    mockCodex.getGitDiff.mockResolvedValue("mock diff content");
     mockUi.startProgress.mockImplementation(() => ({ stop: vi.fn() }));
   });
 
@@ -583,6 +585,63 @@ describe("orchestrator", () => {
     expect(mockClaudeCode.generateCode).toHaveBeenCalledTimes(1);
     expect(mockCodex.reviewPlan).toHaveBeenCalledTimes(1);
     expect(mockCodex.reviewCode).toHaveBeenCalledTimes(1);
+  });
+
+  it("コードレビューで getGitDiff → CODE_REVIEW プロンプト → reviewCode(prompt, opts) の連携が正しい", async () => {
+    const planText = "Test plan content";
+    const diffText = "diff --git a/file.ts";
+
+    mockClaudeCode.generatePlan.mockResolvedValue({
+      response: planText,
+      raw: { exitCode: 0, stdout: "", stderr: "" },
+    });
+    mockCodex.reviewPlan.mockResolvedValue({
+      response: "Looks good",
+      raw: { exitCode: 0, stdout: "", stderr: "" },
+    });
+    mockJudgeReview.mockResolvedValue(makeJudgment(false));
+    mockUi.confirmYesNo.mockResolvedValue(true);
+    mockClaudeCode.generateCode.mockResolvedValue({
+      response: "Generated code",
+      raw: { exitCode: 0, stdout: "", stderr: "" },
+    });
+    mockCodex.getGitDiff.mockResolvedValue(diffText);
+    mockCodex.reviewCode.mockResolvedValue({
+      response: "Code looks good",
+      raw: { exitCode: 0, stdout: "", stderr: "" },
+    });
+
+    await runWorkflow(defaultOptions);
+
+    // getGitDiff が cwd で呼ばれること
+    expect(mockCodex.getGitDiff).toHaveBeenCalledWith(defaultOptions.cwd);
+    // reviewCode の第1引数がプランと diff を含むプロンプトであること
+    const reviewPrompt = mockCodex.reviewCode.mock.calls[0][0] as string;
+    expect(reviewPrompt).toContain(planText);
+    expect(reviewPrompt).toContain(diffText);
+    // 第2引数が options であること
+    expect(mockCodex.reviewCode.mock.calls[0][1]).toMatchObject({ cwd: defaultOptions.cwd });
+  });
+
+  it("getGitDiff が空文字を返した場合にエラーで停止する", async () => {
+    mockClaudeCode.generatePlan.mockResolvedValue({
+      response: "Plan",
+      raw: { exitCode: 0, stdout: "", stderr: "" },
+    });
+    mockCodex.reviewPlan.mockResolvedValue({
+      response: "OK",
+      raw: { exitCode: 0, stdout: "", stderr: "" },
+    });
+    mockJudgeReview.mockResolvedValue(makeJudgment(false));
+    mockUi.confirmYesNo.mockResolvedValue(true);
+    mockClaudeCode.generateCode.mockResolvedValue({
+      response: "Code",
+      raw: { exitCode: 0, stdout: "", stderr: "" },
+    });
+    mockCodex.getGitDiff.mockResolvedValue("");
+
+    await expect(runWorkflow(defaultOptions)).rejects.toThrow("差分の取得に失敗しました");
+    expect(mockCodex.reviewCode).not.toHaveBeenCalled();
   });
 
   it("verbose=true かつ streaming 非対応の場合、Claude 呼び出しでスピナーが表示される", async () => {

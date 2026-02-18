@@ -85,6 +85,58 @@ export async function checkGitChanges(cwd: string): Promise<boolean> {
 }
 
 /**
+ * staged + unstaged + untracked の差分を収集する。
+ */
+export async function getGitDiff(cwd: string, maxLength = 50_000): Promise<string> {
+  const unstaged = await runCli("git", { args: ["diff"], cwd, timeoutMs: 30_000 });
+  const staged = await runCli("git", { args: ["diff", "--cached"], cwd, timeoutMs: 30_000 });
+
+  const parts: string[] = [];
+  if (staged.exitCode === 0 && staged.stdout.trim()) {
+    parts.push("## Staged Changes\n" + staged.stdout);
+  }
+  if (unstaged.exitCode === 0 && unstaged.stdout.trim()) {
+    parts.push("## Unstaged Changes\n" + unstaged.stdout);
+  }
+
+  // Untracked files: git diff では拾えないため個別に差分化
+  const MAX_UNTRACKED_FILES = 50;
+  const untrackedList = await runCli("git", {
+    args: ["ls-files", "--others", "--exclude-standard"],
+    cwd,
+    timeoutMs: 30_000,
+  });
+  if (untrackedList.exitCode === 0 && untrackedList.stdout.trim()) {
+    const allFiles = untrackedList.stdout.trim().split("\n").filter(Boolean);
+    const files = allFiles.slice(0, MAX_UNTRACKED_FILES);
+    const untrackedDiffs: string[] = [];
+    for (const file of files) {
+      const diff = await runCli("git", {
+        args: ["diff", "--no-index", "--", "/dev/null", file],
+        cwd,
+        timeoutMs: 10_000,
+      });
+      // git diff --no-index は差分ありで exitCode=1 が正常
+      if ((diff.exitCode === 0 || diff.exitCode === 1) && diff.stdout.trim()) {
+        untrackedDiffs.push(diff.stdout);
+      }
+    }
+    if (untrackedDiffs.length > 0) {
+      const header = allFiles.length > MAX_UNTRACKED_FILES
+        ? `## Untracked Files (${MAX_UNTRACKED_FILES}/${allFiles.length} files, remaining omitted)\n`
+        : "## Untracked Files\n";
+      parts.push(header + untrackedDiffs.join("\n"));
+    }
+  }
+
+  let combined = parts.join("\n\n");
+  if (combined.length > maxLength) {
+    combined = combined.slice(0, maxLength) + "\n\n... (差分が長すぎるため省略されました)";
+  }
+  return combined;
+}
+
+/**
  * Codex CLI をストリーミングモード対応で実行する。
  * streaming: true → JSONL をインターセプトしてテキスト差分のみ onStdout に送出
  * streaming: false → 現行動作（raw onStdout パススルー）
@@ -231,13 +283,16 @@ export async function reviewPlan(
  * コードレビュー
  */
 export async function reviewCode(
+  prompt: string,
   options: CodexOptions,
 ): Promise<{ response: string; raw: CliRunResult }> {
-  const args = ["exec", "review", "--uncommitted", "--json"];
+  const args = ["exec", "--sandbox", "read-only", "--json"];
 
   if (options.model) {
     args.push("--model", options.model);
   }
+
+  args.push(prompt);
 
   const { result, streamResult } = await runCodexWithStreaming(args, options);
 

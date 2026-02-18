@@ -145,12 +145,6 @@ export async function validateCapabilities(
       helpArgs: ["exec", "--help"],
       requiredFlags: ["--sandbox", "--json"],
     },
-    {
-      label: "codex exec review",
-      command: "codex",
-      helpArgs: ["exec", "review", "--help"],
-      requiredFlags: ["--uncommitted", "--json"],
-    },
   ];
 
   if (dangerous) {

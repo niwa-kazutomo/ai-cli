@@ -251,9 +251,9 @@ describe("formatActiveOptions", () => {
   it("--max-code-iterations がデフォルト以外 → 表示される", () => {
     const result = formatActiveOptions({
       ...baseOptions,
-      maxCodeIterations: 10,
+      maxCodeIterations: 3,
     });
-    expect(result).toBe("⚙ オプション: --max-code-iterations 10");
+    expect(result).toBe("⚙ オプション: --max-code-iterations 3");
   });
 
   it("--max-code-iterations がデフォルト値 → null を返す", () => {

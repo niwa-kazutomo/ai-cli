@@ -118,7 +118,7 @@ export async function runWorkflow(options: OrchestratorOptions): Promise<void> {
         : PROMPTS.PLAN_REVIEW_CONTINUATION(formatConcerns(lastPlanJudgment!), currentPlan);
 
     const reviewResult: Awaited<ReturnType<typeof codex.reviewPlan>> =
-      await runWithProgress(shouldStream, "プランレビュー中...", () =>
+      await runWithProgress(false, "プランレビュー中...", () =>
         codex.reviewPlan(
           session,
           reviewPrompt,
@@ -138,7 +138,7 @@ export async function runWorkflow(options: OrchestratorOptions): Promise<void> {
     // Step 2.5: Judge review
     ui.display("⚖️ Step 2.5: レビュー判定中...");
     const judgment: ReviewJudgment = await runWithProgress(
-      shouldStream,
+      false,
       "レビュー判定中...",
       () =>
         judgeReview(reviewOutput, {
@@ -251,15 +251,21 @@ export async function runWorkflow(options: OrchestratorOptions): Promise<void> {
     }
 
     // Code review with Codex
-    const codeReviewResult = await runWithProgress(shouldStream, "コードレビュー中...", () =>
-      codex.reviewCode(codexOpts),
+    const gitDiff = await codex.getGitDiff(cwd);
+    if (!gitDiff.trim()) {
+      throw new Error("Git の変更が検出されましたが、差分の取得に失敗しました。");
+    }
+    const codeReviewPrompt = PROMPTS.CODE_REVIEW(currentPlan, gitDiff);
+
+    const codeReviewResult = await runWithProgress(false, "コードレビュー中...", () =>
+      codex.reviewCode(codeReviewPrompt, codexOpts),
     );
     const codeReviewOutput = codeReviewResult.response;
     logger.verbose("コードレビュー結果", codeReviewOutput);
 
     // Step 5.5: Judge code review
     ui.display("⚖️ Step 5.5: コードレビュー判定中...");
-    const codeJudgment = await runWithProgress(shouldStream, "コードレビュー判定中...", () =>
+    const codeJudgment = await runWithProgress(false, "コードレビュー判定中...", () =>
       judgeReview(codeReviewOutput, {
         cwd,
         model: options.claudeModel,
