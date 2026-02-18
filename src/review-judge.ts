@@ -219,7 +219,7 @@ export function hasBareSeverityTokens(text: string): boolean {
  */
 export async function judgeReview(
   reviewOutput: string,
-  options: { cwd: string; model?: string },
+  options: { cwd: string; model?: string; onStderr?: (chunk: string) => void },
 ): Promise<ReviewJudgment> {
   const prompt = PROMPTS.REVIEW_JUDGMENT(reviewOutput);
 
@@ -236,6 +236,7 @@ export async function judgeReview(
     result = await runCli("claude", {
       args,
       cwd: options.cwd,
+      onStderr: options.onStderr,
     });
   } catch (err) {
     logger.error(`レビュー判定の実行に失敗しました: ${err}`);

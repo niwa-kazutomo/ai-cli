@@ -509,6 +509,23 @@ describe("judgeReview", () => {
     expect(result.questions_for_user).toEqual([]);
   });
 
+  it("onStderr を受け取り runCli に伝搬する", async () => {
+    runCliMock.mockResolvedValue({
+      exitCode: 0,
+      stdout: "### 概要\n問題なし\n\n### 懸念事項\n懸念事項なし",
+      stderr: "",
+    });
+
+    const onStderr = vi.fn();
+    const { judgeReview } = await import("../src/review-judge.js");
+    await judgeReview("review output", { cwd: "/tmp", onStderr });
+
+    expect(runCliMock).toHaveBeenCalledWith(
+      "claude",
+      expect.objectContaining({ onStderr }),
+    );
+  });
+
   it("マーカーなし + 裸トークン P1 あり → fail-safe", async () => {
     runCliMock.mockResolvedValue({
       exitCode: 0,

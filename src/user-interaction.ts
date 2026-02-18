@@ -136,3 +136,33 @@ export function display(message: string): void {
 export function displaySeparator(): void {
   process.stderr.write(`${"─".repeat(60)}\n`);
 }
+
+/**
+ * 経過時間を表示する進捗インジケータを開始する。
+ * stop(true): 成功表示して改行
+ * stop(false): 行をクリア（後続のエラー表示に任せる）
+ */
+export function startProgress(label: string): { stop: (ok?: boolean) => void } {
+  const startTime = Date.now();
+  const timer = setInterval(() => {
+    const elapsed = Math.floor((Date.now() - startTime) / 1000);
+    process.stderr.write(`\r⏳ ${label} (${elapsed}s)`);
+  }, 1000);
+
+  let stopped = false;
+
+  return {
+    stop(ok = true) {
+      if (stopped) return;
+      stopped = true;
+      clearInterval(timer);
+
+      if (ok) {
+        const elapsed = Math.floor((Date.now() - startTime) / 1000);
+        process.stderr.write(`\r⏳ ${label} (${elapsed}s) ✔\n`);
+      } else {
+        process.stderr.write(`\r${" ".repeat(label.length + 20)}\r`);
+      }
+    },
+  };
+}

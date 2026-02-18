@@ -27,6 +27,7 @@ vi.mock("../src/user-interaction.js", () => ({
   askQuestions: vi.fn().mockResolvedValue(""),
   display: vi.fn(),
   displaySeparator: vi.fn(),
+  startProgress: vi.fn().mockImplementation(() => ({ stop: vi.fn() })),
 }));
 
 vi.mock("../src/logger.js", () => ({
@@ -72,6 +73,9 @@ function makeJudgment(hasConcerns: boolean, concerns: ReviewJudgment["concerns"]
 describe("orchestrator", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mockCodex.checkGitRepo.mockResolvedValue(true);
+    mockCodex.checkGitChanges.mockResolvedValue(true);
+    mockUi.startProgress.mockImplementation(() => ({ stop: vi.fn() }));
   });
 
   it("懸念なしでワークフローが正常完了する", async () => {
@@ -287,5 +291,136 @@ describe("orchestrator", () => {
     mockCodex.checkGitRepo.mockResolvedValue(false);
 
     await expect(runWorkflow(defaultOptions)).rejects.toThrow("Git リポジトリ");
+  });
+
+  it("verbose=true の場合は onStderr が各 LLM 呼び出しに渡される", async () => {
+    const opts = { ...defaultOptions, verbose: true };
+
+    mockClaudeCode.generatePlan.mockResolvedValue({
+      response: "Generated plan",
+      raw: { exitCode: 0, stdout: "", stderr: "" },
+    });
+    mockCodex.reviewPlan.mockResolvedValue({
+      response: "Looks good",
+      raw: { exitCode: 0, stdout: "", stderr: "" },
+    });
+    mockJudgeReview.mockResolvedValue(makeJudgment(false));
+    mockUi.confirmYesNo.mockResolvedValue(true);
+    mockClaudeCode.generateCode.mockResolvedValue({
+      response: "Generated code",
+      raw: { exitCode: 0, stdout: "", stderr: "" },
+    });
+    mockCodex.reviewCode.mockResolvedValue({
+      response: "Code looks good",
+      raw: { exitCode: 0, stdout: "", stderr: "" },
+    });
+
+    await runWorkflow(opts);
+
+    expect(mockClaudeCode.generatePlan.mock.calls[0][2].onStderr).toEqual(expect.any(Function));
+    expect(mockCodex.reviewPlan.mock.calls[0][2].onStderr).toEqual(expect.any(Function));
+    expect(mockJudgeReview.mock.calls[0][1].onStderr).toEqual(expect.any(Function));
+  });
+
+  it("verbose=false かつ debug=false の場合は onStderr が undefined", async () => {
+    mockClaudeCode.generatePlan.mockResolvedValue({
+      response: "Generated plan",
+      raw: { exitCode: 0, stdout: "", stderr: "" },
+    });
+    mockCodex.reviewPlan.mockResolvedValue({
+      response: "Looks good",
+      raw: { exitCode: 0, stdout: "", stderr: "" },
+    });
+    mockJudgeReview.mockResolvedValue(makeJudgment(false));
+    mockUi.confirmYesNo.mockResolvedValue(true);
+    mockClaudeCode.generateCode.mockResolvedValue({
+      response: "Generated code",
+      raw: { exitCode: 0, stdout: "", stderr: "" },
+    });
+    mockCodex.reviewCode.mockResolvedValue({
+      response: "Code looks good",
+      raw: { exitCode: 0, stdout: "", stderr: "" },
+    });
+
+    await runWorkflow(defaultOptions);
+
+    expect(mockClaudeCode.generatePlan.mock.calls[0][2].onStderr).toBeUndefined();
+    expect(mockCodex.reviewPlan.mock.calls[0][2].onStderr).toBeUndefined();
+    expect(mockJudgeReview.mock.calls[0][1].onStderr).toBeUndefined();
+  });
+
+  it("debug=true（verbose=false）でも onStderr が有効になる", async () => {
+    const opts = { ...defaultOptions, verbose: false, debug: true };
+
+    mockClaudeCode.generatePlan.mockResolvedValue({
+      response: "Generated plan",
+      raw: { exitCode: 0, stdout: "", stderr: "" },
+    });
+    mockCodex.reviewPlan.mockResolvedValue({
+      response: "Looks good",
+      raw: { exitCode: 0, stdout: "", stderr: "" },
+    });
+    mockJudgeReview.mockResolvedValue(makeJudgment(false));
+    mockUi.confirmYesNo.mockResolvedValue(true);
+    mockClaudeCode.generateCode.mockResolvedValue({
+      response: "Generated code",
+      raw: { exitCode: 0, stdout: "", stderr: "" },
+    });
+    mockCodex.reviewCode.mockResolvedValue({
+      response: "Code looks good",
+      raw: { exitCode: 0, stdout: "", stderr: "" },
+    });
+
+    await runWorkflow(opts);
+
+    expect(mockClaudeCode.generatePlan.mock.calls[0][2].onStderr).toEqual(expect.any(Function));
+    expect(mockJudgeReview.mock.calls[0][1].onStderr).toEqual(expect.any(Function));
+  });
+
+  it("通常モードでは startProgress が呼ばれ、成功時に stop(true) が呼ばれる", async () => {
+    const stopFns: Array<ReturnType<typeof vi.fn>> = [];
+    mockUi.startProgress.mockImplementation(() => {
+      const stop = vi.fn();
+      stopFns.push(stop);
+      return { stop };
+    });
+
+    mockClaudeCode.generatePlan.mockResolvedValue({
+      response: "Generated plan",
+      raw: { exitCode: 0, stdout: "", stderr: "" },
+    });
+    mockCodex.reviewPlan.mockResolvedValue({
+      response: "Looks good",
+      raw: { exitCode: 0, stdout: "", stderr: "" },
+    });
+    mockJudgeReview.mockResolvedValue(makeJudgment(false));
+    mockUi.confirmYesNo.mockResolvedValue(true);
+    mockClaudeCode.generateCode.mockResolvedValue({
+      response: "Generated code",
+      raw: { exitCode: 0, stdout: "", stderr: "" },
+    });
+    mockCodex.reviewCode.mockResolvedValue({
+      response: "Code looks good",
+      raw: { exitCode: 0, stdout: "", stderr: "" },
+    });
+
+    await runWorkflow(defaultOptions);
+
+    expect(mockUi.startProgress).toHaveBeenCalled();
+    expect(stopFns.length).toBeGreaterThan(0);
+    stopFns.forEach((stop) => {
+      expect(stop).toHaveBeenCalledWith(true);
+      expect(stop).not.toHaveBeenCalledWith(false);
+    });
+  });
+
+  it("通常モードで LLM 呼び出しが失敗した場合に stop(false) が呼ばれる", async () => {
+    const stop = vi.fn();
+    mockUi.startProgress.mockReturnValue({ stop });
+    mockClaudeCode.generatePlan.mockRejectedValue(new Error("boom"));
+
+    await expect(runWorkflow(defaultOptions)).rejects.toThrow("boom");
+
+    expect(stop).toHaveBeenCalledWith(false);
   });
 });

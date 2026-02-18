@@ -18,8 +18,30 @@ function formatConcerns(judgment: ReviewJudgment): string {
     .join("\n");
 }
 
+async function runWithProgress<T>(
+  shouldStream: boolean,
+  label: string,
+  task: () => Promise<T>,
+): Promise<T> {
+  const progress = shouldStream ? null : ui.startProgress(label);
+  try {
+    const result = await task();
+    progress?.stop(true);
+    return result;
+  } catch (err) {
+    progress?.stop(false);
+    throw err;
+  }
+}
+
 export async function runWorkflow(options: OrchestratorOptions): Promise<void> {
   const { prompt, maxPlanIterations, maxCodeIterations, dangerous, cwd } = options;
+  const shouldStream = options.verbose || options.debug;
+  const stderrCallback = shouldStream
+    ? (chunk: string) => {
+        process.stderr.write(chunk);
+      }
+    : undefined;
 
   // Step 0: Capability check
   ui.display("🔍 CLI の互換性をチェックしています...");
@@ -34,10 +56,12 @@ export async function runWorkflow(options: OrchestratorOptions): Promise<void> {
     cwd,
     model: options.claudeModel,
     dangerous,
+    onStderr: stderrCallback,
   };
   const codexOpts = {
     cwd,
     model: options.codexModel,
+    onStderr: stderrCallback,
   };
 
   // ===== Plan Phase =====
@@ -46,7 +70,9 @@ export async function runWorkflow(options: OrchestratorOptions): Promise<void> {
   logger.verbose("プロンプト", prompt);
 
   const planPrompt = PROMPTS.PLAN_GENERATION(prompt);
-  let planResult = await claudeCode.generatePlan(session, planPrompt, claudeOpts);
+  let planResult = await runWithProgress(shouldStream, "プラン生成中...", () =>
+    claudeCode.generatePlan(session, planPrompt, claudeOpts),
+  );
   let currentPlan = planResult.response;
   logger.verbose("生成されたプラン", currentPlan);
 
@@ -65,29 +91,41 @@ export async function runWorkflow(options: OrchestratorOptions): Promise<void> {
     ui.displaySeparator();
     ui.display(`🔎 Step 2: プランレビュー (${planIteration}/${maxPlanIterations})...`);
 
-    const reviewPrompt =
+    const reviewPrompt: string =
       planIteration === 1
         ? PROMPTS.PLAN_REVIEW(currentPlan)
         : PROMPTS.PLAN_REVIEW_CONTINUATION(formatConcerns(lastPlanJudgment!));
 
-    const reviewResult = await codex.reviewPlan(
-      session,
-      reviewPrompt,
-      codexOpts,
-      planIteration > 1 && !session.codexSessionId
-        ? { planSummary: currentPlan.slice(0, 500), reviewSummary: planReviewSummary.slice(0, 500) }
-        : undefined,
-    );
-    const reviewOutput = reviewResult.response;
+    const reviewResult: Awaited<ReturnType<typeof codex.reviewPlan>> =
+      await runWithProgress(shouldStream, "プランレビュー中...", () =>
+        codex.reviewPlan(
+          session,
+          reviewPrompt,
+          codexOpts,
+          planIteration > 1 && !session.codexSessionId
+            ? {
+                planSummary: currentPlan.slice(0, 500),
+                reviewSummary: planReviewSummary.slice(0, 500),
+              }
+            : undefined,
+        ),
+      );
+    const reviewOutput: string = reviewResult.response;
     planReviewSummary = reviewOutput.slice(0, 500);
     logger.verbose("レビュー結果", reviewOutput);
 
     // Step 2.5: Judge review
     ui.display("⚖️ Step 2.5: レビュー判定中...");
-    const judgment = await judgeReview(reviewOutput, {
-      cwd,
-      model: options.claudeModel,
-    });
+    const judgment: ReviewJudgment = await runWithProgress(
+      shouldStream,
+      "レビュー判定中...",
+      () =>
+        judgeReview(reviewOutput, {
+          cwd,
+          model: options.claudeModel,
+          onStderr: stderrCallback,
+        }),
+    );
     lastPlanJudgment = judgment;
 
     ui.display(`\n📊 レビュー判定結果: ${judgment.summary}`);
@@ -117,7 +155,9 @@ export async function runWorkflow(options: OrchestratorOptions): Promise<void> {
       formatConcerns(judgment),
       userAnswers || undefined,
     );
-    planResult = await claudeCode.generatePlan(session, revisionPrompt, claudeOpts);
+    planResult = await runWithProgress(shouldStream, "プラン修正中...", () =>
+      claudeCode.generatePlan(session, revisionPrompt, claudeOpts),
+    );
     currentPlan = planResult.response;
     logger.verbose("修正されたプラン", currentPlan);
 
@@ -169,7 +209,9 @@ export async function runWorkflow(options: OrchestratorOptions): Promise<void> {
   ui.display("💻 Step 4: コード生成を開始します...");
 
   const codePrompt = PROMPTS.CODE_GENERATION();
-  const codeResult = await claudeCode.generateCode(session, codePrompt, claudeOpts);
+  const codeResult = await runWithProgress(shouldStream, "コード生成中...", () =>
+    claudeCode.generateCode(session, codePrompt, claudeOpts),
+  );
   logger.verbose("コード生成結果", codeResult.response);
 
   // Code review loop
@@ -192,16 +234,21 @@ export async function runWorkflow(options: OrchestratorOptions): Promise<void> {
     }
 
     // Code review with Codex
-    const codeReviewResult = await codex.reviewCode(codexOpts);
+    const codeReviewResult = await runWithProgress(shouldStream, "コードレビュー中...", () =>
+      codex.reviewCode(codexOpts),
+    );
     const codeReviewOutput = codeReviewResult.response;
     logger.verbose("コードレビュー結果", codeReviewOutput);
 
     // Step 5.5: Judge code review
     ui.display("⚖️ Step 5.5: コードレビュー判定中...");
-    const codeJudgment = await judgeReview(codeReviewOutput, {
-      cwd,
-      model: options.claudeModel,
-    });
+    const codeJudgment = await runWithProgress(shouldStream, "コードレビュー判定中...", () =>
+      judgeReview(codeReviewOutput, {
+        cwd,
+        model: options.claudeModel,
+        onStderr: stderrCallback,
+      }),
+    );
     lastCodeJudgment = codeJudgment;
 
     ui.display(`\n📊 コードレビュー判定結果: ${codeJudgment.summary}`);
@@ -223,7 +270,9 @@ export async function runWorkflow(options: OrchestratorOptions): Promise<void> {
     ui.displaySeparator();
     ui.display("🔄 Step 6: コードを修正中...");
     const codeRevisionPrompt = PROMPTS.CODE_REVISION(formatConcerns(codeJudgment));
-    await claudeCode.generateCode(session, codeRevisionPrompt, claudeOpts);
+    await runWithProgress(shouldStream, "コード修正中...", () =>
+      claudeCode.generateCode(session, codeRevisionPrompt, claudeOpts),
+    );
     logger.verbose("コード修正完了");
   }
 
