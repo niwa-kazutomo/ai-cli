@@ -211,97 +211,119 @@ describe("extractFromStreamEvents", () => {
 });
 
 describe("extractTextFromCodexEvent", () => {
-  it("output_text フィールドからテキストを抽出する", () => {
+  it("item.completed の agent_message からテキストを抽出する", () => {
     const event: StreamJsonEvent = {
-      type: "response",
-      output_text: "Hello from Codex",
+      type: "item.completed",
+      item: { id: "item_1", type: "agent_message", text: "Hello from Codex" },
     };
     expect(extractTextFromCodexEvent(event)).toBe("Hello from Codex");
   });
 
-  it("output_text が content より優先される", () => {
+  it("item.updated の agent_message からテキストを抽出する", () => {
     const event: StreamJsonEvent = {
-      type: "message",
-      output_text: "preferred",
-      content: "ignored",
+      type: "item.updated",
+      item: { id: "item_1", type: "agent_message", text: "Partial text" },
     };
-    expect(extractTextFromCodexEvent(event)).toBe("preferred");
+    expect(extractTextFromCodexEvent(event)).toBe("Partial text");
   });
 
-  it("type: message + content string からテキストを抽出する", () => {
+  it("item.started の agent_message からテキストを抽出する（空でなければ）", () => {
     const event: StreamJsonEvent = {
-      type: "message",
-      content: "String content",
+      type: "item.started",
+      item: { id: "item_1", type: "agent_message", text: "Initial" },
     };
-    expect(extractTextFromCodexEvent(event)).toBe("String content");
+    expect(extractTextFromCodexEvent(event)).toBe("Initial");
   });
 
-  it("type: message + content 配列からテキストを抽出する", () => {
+  it("item.started で空テキストは null を返す", () => {
     const event: StreamJsonEvent = {
-      type: "message",
-      content: [
-        { type: "text", text: "Part 1" },
-        { type: "text", text: " Part 2" },
-      ],
+      type: "item.started",
+      item: { id: "item_1", type: "agent_message", text: "" },
     };
-    expect(extractTextFromCodexEvent(event)).toBe("Part 1 Part 2");
+    expect(extractTextFromCodexEvent(event)).toBeNull();
   });
 
-  it("type: message で content 配列に text ブロックがない場合は null", () => {
+  it("agent_message 以外の item type は null を返す", () => {
     const event: StreamJsonEvent = {
-      type: "message",
-      content: [{ type: "tool_use", id: "123" }],
+      type: "item.completed",
+      item: { id: "item_1", type: "tool_call", text: "ignored" },
     };
     expect(extractTextFromCodexEvent(event)).toBeNull();
   });
 
   it("テキストフィールドがないイベントは null を返す", () => {
-    const event: StreamJsonEvent = { type: "status", status: "complete" };
+    const event: StreamJsonEvent = { type: "turn.started" };
     expect(extractTextFromCodexEvent(event)).toBeNull();
   });
 
-  it("message 以外の type で content があっても無視する", () => {
+  it("thread.started イベントは null を返す", () => {
+    const event: StreamJsonEvent = { type: "thread.started", thread_id: "tid-123" };
+    expect(extractTextFromCodexEvent(event)).toBeNull();
+  });
+
+  it("turn.completed イベントは null を返す", () => {
     const event: StreamJsonEvent = {
-      type: "other",
-      content: "should be ignored",
+      type: "turn.completed",
+      usage: { input_tokens: 100, output_tokens: 50 },
     };
     expect(extractTextFromCodexEvent(event)).toBeNull();
   });
 });
 
 describe("extractFromCodexStreamEvents", () => {
-  it("複数イベントのテキストを改行で join する", () => {
+  it("item.completed の agent_message からテキストを抽出する", () => {
     const events: StreamJsonEvent[] = [
-      { type: "message", content: "Line 1" },
-      { type: "message", content: "Line 2" },
-      { type: "response", output_text: "Line 3" },
+      { type: "thread.started", thread_id: "tid-1" },
+      { type: "item.started", item: { id: "item_1", type: "agent_message", text: "" } },
+      { type: "item.updated", item: { id: "item_1", type: "agent_message", text: "Hello" } },
+      { type: "item.completed", item: { id: "item_1", type: "agent_message", text: "Hello World" } },
     ];
     const result = extractFromCodexStreamEvents(events);
-    expect(result.response).toBe("Line 1\nLine 2\nLine 3");
+    expect(result.response).toBe("Hello World");
   });
 
-  it("session_id フィールドを抽出する", () => {
+  it("複数の item.completed を改行で join する", () => {
     const events: StreamJsonEvent[] = [
-      { type: "init", session_id: "sess-123" },
-      { type: "message", content: "Hello" },
+      { type: "item.completed", item: { id: "item_1", type: "agent_message", text: "Line 1" } },
+      { type: "item.completed", item: { id: "item_2", type: "agent_message", text: "Line 2" } },
+    ];
+    const result = extractFromCodexStreamEvents(events);
+    expect(result.response).toBe("Line 1\nLine 2");
+  });
+
+  it("thread.started の thread_id を sessionId として抽出する", () => {
+    const events: StreamJsonEvent[] = [
+      { type: "thread.started", thread_id: "sess-123" },
+      { type: "item.completed", item: { id: "item_1", type: "agent_message", text: "Hello" } },
     ];
     const result = extractFromCodexStreamEvents(events);
     expect(result.sessionId).toBe("sess-123");
   });
 
-  it("id フィールドは sessionId として使わない", () => {
+  it("thread_id がない場合は sessionId が null", () => {
     const events: StreamJsonEvent[] = [
-      { type: "message", id: "msg_abc", content: "Hello" },
+      { type: "item.completed", item: { id: "item_1", type: "agent_message", text: "Hello" } },
     ];
     const result = extractFromCodexStreamEvents(events);
     expect(result.sessionId).toBeNull();
   });
 
+  it("thread.started のみ（agent_message なし）でセッション ID だけ取れる", () => {
+    const events: StreamJsonEvent[] = [
+      { type: "thread.started", thread_id: "only-session" },
+      { type: "turn.started" },
+      { type: "turn.completed", usage: { input_tokens: 100 } },
+    ];
+    const result = extractFromCodexStreamEvents(events);
+    expect(result.sessionId).toBe("only-session");
+    expect(result.response).toBe("");
+  });
+
   it("テキストのないイベントはスキップされる", () => {
     const events: StreamJsonEvent[] = [
-      { type: "status", status: "working" },
-      { type: "message", content: "Only text" },
-      { type: "done" },
+      { type: "turn.started" },
+      { type: "item.completed", item: { id: "item_1", type: "agent_message", text: "Only text" } },
+      { type: "turn.completed", usage: {} },
     ];
     const result = extractFromCodexStreamEvents(events);
     expect(result.response).toBe("Only text");
@@ -311,5 +333,38 @@ describe("extractFromCodexStreamEvents", () => {
     const result = extractFromCodexStreamEvents([]);
     expect(result.response).toBe("");
     expect(result.sessionId).toBeNull();
+  });
+
+  it("item.completed がなく item.updated のみの場合にフォールバック抽出される", () => {
+    const events: StreamJsonEvent[] = [
+      { type: "item.started", item: { id: "item_1", type: "agent_message", text: "" } },
+      { type: "item.updated", item: { id: "item_1", type: "agent_message", text: "Partial" } },
+      { type: "item.updated", item: { id: "item_1", type: "agent_message", text: "Partial result" } },
+    ];
+    const result = extractFromCodexStreamEvents(events);
+    expect(result.response).toBe("Partial result");
+  });
+
+  it("同一 item の started→updated→completed ライフサイクルで重複なし", () => {
+    const events: StreamJsonEvent[] = [
+      { type: "item.started", item: { id: "item_1", type: "agent_message", text: "" } },
+      { type: "item.updated", item: { id: "item_1", type: "agent_message", text: "A" } },
+      { type: "item.updated", item: { id: "item_1", type: "agent_message", text: "AB" } },
+      { type: "item.completed", item: { id: "item_1", type: "agent_message", text: "AB" } },
+    ];
+    const result = extractFromCodexStreamEvents(events);
+    // completed が1件なので1つのテキストのみ
+    expect(result.response).toBe("AB");
+  });
+
+  it("error / turn.failed イベント混在時にテキスト抽出が壊れない", () => {
+    const events: StreamJsonEvent[] = [
+      { type: "thread.started", thread_id: "tid-err" },
+      { type: "item.completed", item: { id: "item_1", type: "agent_message", text: "Before error" } },
+      { type: "turn.failed", error: "something went wrong" },
+    ];
+    const result = extractFromCodexStreamEvents(events);
+    expect(result.response).toBe("Before error");
+    expect(result.sessionId).toBe("tid-err");
   });
 });

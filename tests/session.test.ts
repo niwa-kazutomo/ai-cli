@@ -39,36 +39,47 @@ describe("markCodexUsed", () => {
 });
 
 describe("extractCodexSessionId", () => {
-  it("session_id フィールドを抽出する", () => {
-    const jsonl = JSON.stringify({ session_id: "sess-abc123" });
+  it("thread.started の thread_id を抽出する", () => {
+    const jsonl = JSON.stringify({ type: "thread.started", thread_id: "0199a213-abcd-1234" });
+    expect(extractCodexSessionId(jsonl)).toBe("0199a213-abcd-1234");
+  });
+
+  it("session_id フィールドをフォールバックで抽出する", () => {
+    const jsonl = JSON.stringify({ type: "init", session_id: "sess-abc123" });
     expect(extractCodexSessionId(jsonl)).toBe("sess-abc123");
   });
 
-  it("type: session の id フィールドを抽出する", () => {
-    const jsonl = JSON.stringify({ type: "session", id: "id-xyz789" });
-    expect(extractCodexSessionId(jsonl)).toBe("id-xyz789");
-  });
-
-  it("type が session でないイベントの id は無視する", () => {
-    const jsonl = JSON.stringify({ type: "message", id: "msg_abc123" });
-    expect(extractCodexSessionId(jsonl)).toBeNull();
-  });
-
-  it("複数行の JSONL で最初の session_id を返す", () => {
+  it("thread_id が session_id より優先される", () => {
     const jsonl = [
-      JSON.stringify({ type: "init", session_id: "first-id" }),
-      JSON.stringify({ type: "message", content: "Hello" }),
+      JSON.stringify({ type: "thread.started", thread_id: "thread-id" }),
+      JSON.stringify({ type: "init", session_id: "session-id" }),
+    ].join("\n");
+    expect(extractCodexSessionId(jsonl)).toBe("thread-id");
+  });
+
+  it("複数行の JSONL で thread.started の thread_id を返す", () => {
+    const jsonl = [
+      JSON.stringify({ type: "thread.started", thread_id: "first-thread" }),
+      JSON.stringify({ type: "item.completed", item: { id: "item_1", type: "agent_message", text: "Hello" } }),
     ].join("\n");
 
-    expect(extractCodexSessionId(jsonl)).toBe("first-id");
+    expect(extractCodexSessionId(jsonl)).toBe("first-thread");
   });
 
-  it("session_id も id も存在しない場合は null を返す", () => {
-    const jsonl = JSON.stringify({ type: "message", content: "no id" });
+  it("thread_id も session_id も存在しない場合は null を返す", () => {
+    const jsonl = JSON.stringify({ type: "item.completed", item: { id: "item_1", type: "agent_message", text: "Hello" } });
     expect(extractCodexSessionId(jsonl)).toBeNull();
   });
 
-  it("不正な JSONL で null を返す", () => {
+  it("不正な JSON 行をスキップして後続の thread.started を取る", () => {
+    const jsonl = [
+      "not valid json",
+      JSON.stringify({ type: "thread.started", thread_id: "after-invalid" }),
+    ].join("\n");
+    expect(extractCodexSessionId(jsonl)).toBe("after-invalid");
+  });
+
+  it("全行が不正な JSONL で null を返す", () => {
     expect(extractCodexSessionId("not valid json")).toBeNull();
   });
 

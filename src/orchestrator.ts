@@ -115,7 +115,7 @@ export async function runWorkflow(options: OrchestratorOptions): Promise<void> {
     const reviewPrompt: string =
       planIteration === 1
         ? PROMPTS.PLAN_REVIEW(currentPlan)
-        : PROMPTS.PLAN_REVIEW_CONTINUATION(formatConcerns(lastPlanJudgment!));
+        : PROMPTS.PLAN_REVIEW_CONTINUATION(formatConcerns(lastPlanJudgment!), currentPlan);
 
     const reviewResult: Awaited<ReturnType<typeof codex.reviewPlan>> =
       await runWithProgress(shouldStream, "プランレビュー中...", () =>

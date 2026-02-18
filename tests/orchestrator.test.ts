@@ -217,6 +217,54 @@ describe("orchestrator", () => {
     expect(mockCodex.reviewPlan).toHaveBeenCalledTimes(2);
   });
 
+  it("2回目のプランレビューに修正後プラン本文が含まれる", async () => {
+    const revisedPlan = "Revised plan content";
+
+    mockClaudeCode.generatePlan
+      .mockResolvedValueOnce({
+        response: "Initial plan",
+        raw: { exitCode: 0, stdout: "", stderr: "" },
+      })
+      .mockResolvedValueOnce({
+        response: revisedPlan,
+        raw: { exitCode: 0, stdout: "", stderr: "" },
+      });
+
+    mockCodex.reviewPlan.mockResolvedValue({
+      response: "Review",
+      raw: { exitCode: 0, stdout: "", stderr: "" },
+    });
+
+    // First review: concerns, second: no concerns
+    mockJudgeReview
+      .mockResolvedValueOnce(
+        makeJudgment(true, [{ severity: "P2", description: "Fix this" }]),
+      )
+      .mockResolvedValueOnce(makeJudgment(false))
+      // code review: no concerns
+      .mockResolvedValueOnce(makeJudgment(false));
+
+    mockUi.confirmYesNo.mockResolvedValue(true);
+
+    mockClaudeCode.generateCode.mockResolvedValue({
+      response: "Code",
+      raw: { exitCode: 0, stdout: "", stderr: "" },
+    });
+
+    mockCodex.reviewCode.mockResolvedValue({
+      response: "LGTM",
+      raw: { exitCode: 0, stdout: "", stderr: "" },
+    });
+
+    await runWorkflow(defaultOptions);
+
+    // 2回目の reviewPlan の prompt 引数に修正後プラン本文が含まれること
+    const secondReviewPrompt = mockCodex.reviewPlan.mock.calls[1][1] as string;
+    expect(secondReviewPrompt).toContain(revisedPlan);
+    // 初回プランテキストではないことも確認
+    expect(secondReviewPrompt).not.toContain("Initial plan");
+  });
+
   it("初回プラン生成が空でエラー停止する", async () => {
     mockClaudeCode.generatePlan.mockResolvedValue({
       response: "",

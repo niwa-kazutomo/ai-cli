@@ -19,7 +19,8 @@ export interface CodexOptions {
 
 /**
  * Codex の JSONL 出力からレスポンステキストを抽出する。
- * JSONL パース失敗時は stdout をそのまま返す。
+ * item.completed の agent_message テキストを結合して返す。
+ * JSONL パース失敗時や抽出失敗時は stdout をそのまま返す。
  */
 export function extractResponse(stdout: string): string {
   try {
@@ -29,21 +30,13 @@ export function extractResponse(stdout: string): string {
     for (const line of lines) {
       if (!line.trim()) continue;
       const parsed = JSON.parse(line);
-      // message 形式
-      if (parsed.type === "message" && parsed.content) {
-        if (typeof parsed.content === "string") {
-          texts.push(parsed.content);
-        } else if (Array.isArray(parsed.content)) {
-          for (const block of parsed.content) {
-            if (block.type === "text" && block.text) {
-              texts.push(block.text);
-            }
-          }
-        }
-      }
-      // output_text フィールド
-      if (typeof parsed.output_text === "string") {
-        texts.push(parsed.output_text);
+      // item.completed の agent_message からテキスト抽出
+      if (
+        parsed.type === "item.completed" &&
+        parsed.item?.type === "agent_message" &&
+        typeof parsed.item.text === "string"
+      ) {
+        texts.push(parsed.item.text);
       }
     }
 
@@ -111,10 +104,45 @@ async function runCodexWithStreaming(
   }
 
   // ストリーミングモード: JSONL をインターセプトしてテキスト差分を送出
+  // item ID ごとに最新テキストを Map で管理し、全 item のテキストを join して delta を算出
   const lineBuffer = new StreamJsonLineBuffer();
   const allEvents: import("./stream-json-parser.js").StreamJsonEvent[] = [];
+  const itemTexts = new Map<string, string>();
+  const itemOrder: string[] = [];
   let cumulativeText = "";
   let prevEmittedLength = 0;
+
+  const processEvent = (event: import("./stream-json-parser.js").StreamJsonEvent) => {
+    allEvents.push(event);
+    const text = extractTextFromCodexEvent(event);
+    if (text === null) return;
+
+    // item.id がないイベントは無視（衝突防止）
+    const itemId = event.item?.id;
+    if (typeof itemId !== "string") return;
+
+    if (!itemTexts.has(itemId)) {
+      itemOrder.push(itemId);
+    }
+    itemTexts.set(itemId, text);
+
+    // 全 item のテキストを結合して cumulativeText を再構築
+    cumulativeText = itemOrder
+      .map(id => itemTexts.get(id)!)
+      .filter(t => t)
+      .join("\n");
+
+    // 縮退ガード: item.updated でテキストが短くなった場合に対応
+    if (cumulativeText.length < prevEmittedLength) {
+      prevEmittedLength = 0;
+    }
+
+    const delta = cumulativeText.slice(prevEmittedLength);
+    if (delta) {
+      options.onStdout?.(delta);
+      prevEmittedLength = cumulativeText.length;
+    }
+  };
 
   const result = await runCli("codex", {
     args,
@@ -122,20 +150,7 @@ async function runCodexWithStreaming(
     onStdout: (chunk: string) => {
       const events = lineBuffer.feed(chunk);
       for (const event of events) {
-        allEvents.push(event);
-        const text = extractTextFromCodexEvent(event);
-        if (text !== null) {
-          if (cumulativeText.length > 0) {
-            cumulativeText += "\n" + text;
-          } else {
-            cumulativeText = text;
-          }
-          const delta = cumulativeText.slice(prevEmittedLength);
-          if (delta) {
-            options.onStdout?.(delta);
-            prevEmittedLength = cumulativeText.length;
-          }
-        }
+        processEvent(event);
       }
     },
     onStderr: options.onStderr,
@@ -144,20 +159,7 @@ async function runCodexWithStreaming(
   // 残バッファ処理
   const flushed = lineBuffer.flush();
   for (const event of flushed) {
-    allEvents.push(event);
-    const text = extractTextFromCodexEvent(event);
-    if (text !== null) {
-      if (cumulativeText.length > 0) {
-        cumulativeText += "\n" + text;
-      } else {
-        cumulativeText = text;
-      }
-      const delta = cumulativeText.slice(prevEmittedLength);
-      if (delta) {
-        options.onStdout?.(delta);
-        prevEmittedLength = cumulativeText.length;
-      }
-    }
+    processEvent(event);
   }
 
   const streamResult = extractFromCodexStreamEvents(allEvents);
@@ -219,7 +221,9 @@ export async function reviewPlan(
 
   markCodexUsed(session);
 
-  const response = streamResult?.response ?? extractResponse(result.stdout);
+  const response = streamResult?.response?.trim()
+    ? streamResult.response
+    : extractResponse(result.stdout);
   return { response, raw: result };
 }
 
@@ -243,6 +247,8 @@ export async function reviewCode(
     );
   }
 
-  const response = streamResult?.response ?? extractResponse(result.stdout);
+  const response = streamResult?.response?.trim()
+    ? streamResult.response
+    : extractResponse(result.stdout);
   return { response, raw: result };
 }

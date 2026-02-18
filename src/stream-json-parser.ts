@@ -88,59 +88,63 @@ export function extractTextFromEvent(event: StreamJsonEvent): string | null {
 
 /**
  * Codex の単一イベントからテキストを抽出する。
- * 優先順位: output_text > type: "message" の content
- * テキストなし → null
+ * item.started / item.updated / item.completed で item.type === "agent_message" のとき
+ * item.text を返す。テキストなし → null
  */
 export function extractTextFromCodexEvent(event: StreamJsonEvent): string | null {
-  // output_text フィールドが最優先
-  if (typeof event.output_text === "string") {
-    return event.output_text;
+  if (
+    (event.type === "item.completed" ||
+     event.type === "item.updated" ||
+     event.type === "item.started") &&
+    event.item?.type === "agent_message" &&
+    typeof event.item.text === "string"
+  ) {
+    return event.item.text || null;
   }
-
-  // type: "message" + content からの抽出
-  if (event.type === "message" && event.content) {
-    if (typeof event.content === "string") {
-      return event.content;
-    }
-    if (Array.isArray(event.content)) {
-      const texts: string[] = [];
-      for (const block of event.content) {
-        if (block.type === "text" && typeof block.text === "string") {
-          texts.push(block.text);
-        }
-      }
-      return texts.length > 0 ? texts.join("") : null;
-    }
-  }
-
   return null;
 }
 
 /**
  * Codex イベント列から response と sessionId を抽出する。
- * - テキストは全イベントから抽出し "\n" で join
- * - sessionId は session_id フィールドのみ採用（id は使わない）
+ * - sessionId は thread.started の thread_id から取得
+ * - テキストは item.completed の agent_message を優先。
+ *   item.completed がない場合は item.updated/item.started の最新値をフォールバック
  */
 export function extractFromCodexStreamEvents(events: StreamJsonEvent[]): StreamJsonResult {
-  const texts: string[] = [];
   let sessionId: string | null = null;
 
   for (const event of events) {
-    // session_id フィールドのみ採用
-    if (typeof event.session_id === "string") {
-      sessionId = event.session_id;
-    }
-
-    const text = extractTextFromCodexEvent(event);
-    if (text !== null) {
-      texts.push(text);
+    if (event.type === "thread.started" && typeof event.thread_id === "string") {
+      sessionId = event.thread_id;
     }
   }
 
-  return {
-    response: texts.join("\n"),
-    sessionId,
-  };
+  // item.completed の agent_message を優先抽出
+  const completedTexts: string[] = [];
+  const latestUpdated = new Map<string, string>(); // フォールバック用
+
+  for (const event of events) {
+    const itemId = event.item?.id;
+    const itemType = event.item?.type;
+    const text = event.item?.text;
+    if (itemType !== "agent_message" || typeof text !== "string" || !text) continue;
+
+    if (event.type === "item.completed") {
+      completedTexts.push(text);
+    } else if (
+      (event.type === "item.updated" || event.type === "item.started") &&
+      typeof itemId === "string"
+    ) {
+      latestUpdated.set(itemId, text);
+    }
+  }
+
+  // completed があればそれを、なければ updated/started の最新値をフォールバック
+  const texts = completedTexts.length > 0
+    ? completedTexts
+    : [...latestUpdated.values()];
+
+  return { response: texts.join("\n"), sessionId };
 }
 
 /**

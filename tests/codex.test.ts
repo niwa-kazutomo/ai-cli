@@ -3,23 +3,23 @@ import { extractResponse, checkGitRepo, checkGitChanges, reviewPlan, reviewCode 
 import type { SessionState } from "../src/types.js";
 
 describe("extractResponse", () => {
-  it("message 形式の JSONL からテキストを抽出する", () => {
+  it("item.completed の agent_message からテキストを抽出する", () => {
     const jsonl = [
-      JSON.stringify({ type: "message", content: [{ type: "text", text: "Review result" }] }),
-      JSON.stringify({ type: "done" }),
+      JSON.stringify({ type: "thread.started", thread_id: "tid-1" }),
+      JSON.stringify({ type: "item.completed", item: { id: "item_1", type: "agent_message", text: "Review result" } }),
+      JSON.stringify({ type: "turn.completed", usage: {} }),
     ].join("\n");
 
     expect(extractResponse(jsonl)).toBe("Review result");
   });
 
-  it("output_text フィールドからテキストを抽出する", () => {
-    const jsonl = JSON.stringify({ output_text: "Output text here" });
-    expect(extractResponse(jsonl)).toBe("Output text here");
-  });
+  it("複数の item.completed を改行で join する", () => {
+    const jsonl = [
+      JSON.stringify({ type: "item.completed", item: { id: "item_1", type: "agent_message", text: "Part 1" } }),
+      JSON.stringify({ type: "item.completed", item: { id: "item_2", type: "agent_message", text: "Part 2" } }),
+    ].join("\n");
 
-  it("message.content が string の場合", () => {
-    const jsonl = JSON.stringify({ type: "message", content: "String content" });
-    expect(extractResponse(jsonl)).toBe("String content");
+    expect(extractResponse(jsonl)).toBe("Part 1\nPart 2");
   });
 
   it("JSONL パース失敗時に生テキストを返す", () => {
@@ -28,14 +28,14 @@ describe("extractResponse", () => {
   });
 
   it("テキストが取れない JSONL の場合は生出力を返す", () => {
-    const jsonl = JSON.stringify({ type: "status", status: "complete" });
+    const jsonl = JSON.stringify({ type: "turn.completed", usage: {} });
     expect(extractResponse(jsonl)).toBe(jsonl);
   });
 
   it("空行を無視する", () => {
     const jsonl = [
       "",
-      JSON.stringify({ type: "message", content: [{ type: "text", text: "Hello" }] }),
+      JSON.stringify({ type: "item.completed", item: { id: "item_1", type: "agent_message", text: "Hello" } }),
       "",
     ].join("\n");
 
@@ -100,11 +100,12 @@ describe("reviewPlan streaming", () => {
 
     // runCli がコールされたとき、onStdout に JSONL チャンクを流す
     mockRunCli.mockImplementation(async (_cmd, opts) => {
-      const line1 = JSON.stringify({ type: "init", session_id: "sess-stream" }) + "\n";
-      const line2 = JSON.stringify({ type: "message", content: "Hello" }) + "\n";
-      const line3 = JSON.stringify({ type: "response", output_text: "World" }) + "\n";
-      opts.onStdout?.(line1 + line2 + line3);
-      return { exitCode: 0, stdout: line1 + line2 + line3, stderr: "" };
+      const line1 = JSON.stringify({ type: "thread.started", thread_id: "sess-stream" }) + "\n";
+      const line2 = JSON.stringify({ type: "item.started", item: { id: "item_1", type: "agent_message", text: "" } }) + "\n";
+      const line3 = JSON.stringify({ type: "item.updated", item: { id: "item_1", type: "agent_message", text: "Hello" } }) + "\n";
+      const line4 = JSON.stringify({ type: "item.completed", item: { id: "item_1", type: "agent_message", text: "Hello World" } }) + "\n";
+      opts.onStdout?.(line1 + line2 + line3 + line4);
+      return { exitCode: 0, stdout: line1 + line2 + line3 + line4, stderr: "" };
     });
 
     const result = await reviewPlan(session, "test prompt", {
@@ -114,10 +115,10 @@ describe("reviewPlan streaming", () => {
     });
 
     // ストリームからテキストが抽出されている
-    expect(result.response).toBe("Hello\nWorld");
+    expect(result.response).toBe("Hello World");
     // onStdout にテキスト差分が送出された
     expect(chunks.length).toBeGreaterThan(0);
-    expect(chunks.join("")).toBe("Hello\nWorld");
+    expect(chunks.join("")).toBe("Hello World");
     // セッション ID がストリームから抽出されている
     expect(session.codexSessionId).toBe("sess-stream");
   });
@@ -131,7 +132,7 @@ describe("reviewPlan streaming", () => {
       codexFirstRun: true,
     };
 
-    const jsonl = JSON.stringify({ type: "message", content: "Raw output" }) + "\n";
+    const jsonl = JSON.stringify({ type: "item.completed", item: { id: "item_1", type: "agent_message", text: "Raw output" } }) + "\n";
     mockRunCli.mockImplementation(async (_cmd, opts) => {
       opts.onStdout?.(jsonl);
       return { exitCode: 0, stdout: jsonl, stderr: "" };
@@ -180,7 +181,7 @@ describe("reviewPlan streaming", () => {
 
     mockRunCli.mockResolvedValue({
       exitCode: 0,
-      stdout: JSON.stringify({ type: "message", content: "ok" }),
+      stdout: JSON.stringify({ type: "item.completed", item: { id: "item_1", type: "agent_message", text: "ok" } }),
       stderr: "",
     });
 
@@ -189,7 +190,7 @@ describe("reviewPlan streaming", () => {
     expect(mockMarkCodexUsed).toHaveBeenCalledWith(session);
   });
 
-  it("streaming=true で type なし output_text イベントが取りこぼされない", async () => {
+  it("streaming=true で複数 item の agent_message が正しく結合される", async () => {
     const chunks: string[] = [];
     const session: SessionState = {
       claudeSessionId: null,
@@ -199,9 +200,8 @@ describe("reviewPlan streaming", () => {
     };
 
     mockRunCli.mockImplementation(async (_cmd, opts) => {
-      // type フィールドなしの output_text 行
-      const line1 = JSON.stringify({ output_text: "Typeless output" }) + "\n";
-      const line2 = JSON.stringify({ type: "message", content: "With type" }) + "\n";
+      const line1 = JSON.stringify({ type: "item.completed", item: { id: "item_1", type: "agent_message", text: "First item" } }) + "\n";
+      const line2 = JSON.stringify({ type: "item.completed", item: { id: "item_2", type: "agent_message", text: "Second item" } }) + "\n";
       opts.onStdout?.(line1 + line2);
       return { exitCode: 0, stdout: line1 + line2, stderr: "" };
     });
@@ -212,9 +212,67 @@ describe("reviewPlan streaming", () => {
       onStdout: (chunk) => chunks.push(chunk),
     });
 
-    // 両方のテキストが抽出されている
-    expect(result.response).toBe("Typeless output\nWith type");
-    expect(chunks.join("")).toBe("Typeless output\nWith type");
+    // 両方のテキストが改行で結合されている
+    expect(result.response).toBe("First item\nSecond item");
+    expect(chunks.join("")).toBe("First item\nSecond item");
+  });
+
+  it("streaming=true で item.id がないイベントはスキップされる", async () => {
+    const chunks: string[] = [];
+    const session: SessionState = {
+      claudeSessionId: null,
+      claudeFirstRun: true,
+      codexSessionId: null,
+      codexFirstRun: true,
+    };
+
+    mockRunCli.mockImplementation(async (_cmd, opts) => {
+      // item.id がない agent_message（異常系）
+      const line1 = JSON.stringify({ type: "item.updated", item: { type: "agent_message", text: "No ID" } }) + "\n";
+      const line2 = JSON.stringify({ type: "item.completed", item: { id: "item_1", type: "agent_message", text: "With ID" } }) + "\n";
+      opts.onStdout?.(line1 + line2);
+      return { exitCode: 0, stdout: line1 + line2, stderr: "" };
+    });
+
+    const result = await reviewPlan(session, "test prompt", {
+      cwd: "/tmp",
+      streaming: true,
+      onStdout: (chunk) => chunks.push(chunk),
+    });
+
+    // item.id がないイベントはストリーミング delta からスキップされ、With ID のみ
+    expect(chunks.join("")).toBe("With ID");
+  });
+
+  it("streaming=true で複数 item の交互更新が正しい順序で出力される", async () => {
+    const chunks: string[] = [];
+    const session: SessionState = {
+      claudeSessionId: null,
+      claudeFirstRun: true,
+      codexSessionId: null,
+      codexFirstRun: true,
+    };
+
+    mockRunCli.mockImplementation(async (_cmd, opts) => {
+      const lines = [
+        JSON.stringify({ type: "item.started", item: { id: "item_1", type: "agent_message", text: "A" } }) + "\n",
+        JSON.stringify({ type: "item.started", item: { id: "item_2", type: "agent_message", text: "X" } }) + "\n",
+        JSON.stringify({ type: "item.updated", item: { id: "item_1", type: "agent_message", text: "AB" } }) + "\n",
+      ];
+      for (const line of lines) {
+        opts.onStdout?.(line);
+      }
+      return { exitCode: 0, stdout: lines.join(""), stderr: "" };
+    });
+
+    const result = await reviewPlan(session, "test prompt", {
+      cwd: "/tmp",
+      streaming: true,
+      onStdout: (chunk) => chunks.push(chunk),
+    });
+
+    // item_1 と item_2 が出現順に並び、item_1 の最新テキストが "AB"
+    expect(result.response).toBe("AB\nX");
   });
 });
 
@@ -227,7 +285,7 @@ describe("reviewCode streaming", () => {
     const chunks: string[] = [];
 
     mockRunCli.mockImplementation(async (_cmd, opts) => {
-      const line = JSON.stringify({ type: "message", content: "Review done" }) + "\n";
+      const line = JSON.stringify({ type: "item.completed", item: { id: "item_1", type: "agent_message", text: "Review done" } }) + "\n";
       opts.onStdout?.(line);
       return { exitCode: 0, stdout: line, stderr: "" };
     });

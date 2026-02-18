@@ -20,23 +20,26 @@ export function markCodexUsed(session: SessionState): void {
 
 /**
  * Codex の JSONL 出力からセッション ID を抽出する。
+ * thread.started イベントの thread_id を優先し、フォールバックとして session_id フィールドも探す。
  * 抽出失敗時は null を返す。
  */
 export function extractCodexSessionId(jsonlOutput: string): string | null {
-  try {
-    const lines = jsonlOutput.trim().split("\n");
-    for (const line of lines) {
+  const lines = jsonlOutput.trim().split("\n");
+  for (const line of lines) {
+    try {
       const parsed = JSON.parse(line);
-      if (parsed.session_id) {
-        return parsed.session_id as string;
+      // thread.started の thread_id を優先
+      if (parsed.type === "thread.started" && typeof parsed.thread_id === "string") {
+        return parsed.thread_id;
       }
-      // session ID が id フィールドに入っている場合もある（type: "session" のイベントのみ）
-      if (parsed.id && typeof parsed.id === "string" && parsed.type === "session") {
-        return parsed.id;
+      // フォールバック: session_id フィールド
+      if (typeof parsed.session_id === "string") {
+        return parsed.session_id;
       }
+    } catch {
+      // 不正 JSON 行はスキップして次の行へ
+      continue;
     }
-  } catch {
-    logger.debug("Codex セッション ID の抽出に失敗しました");
   }
   return null;
 }
