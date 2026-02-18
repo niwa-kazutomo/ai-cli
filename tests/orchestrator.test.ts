@@ -214,6 +214,60 @@ describe("orchestrator", () => {
     expect(mockCodex.reviewPlan).toHaveBeenCalledTimes(2);
   });
 
+  it("初回プラン生成が空でエラー停止する", async () => {
+    mockClaudeCode.generatePlan.mockResolvedValue({
+      response: "",
+      raw: { exitCode: 0, stdout: "", stderr: "" },
+    });
+
+    await expect(runWorkflow(defaultOptions)).rejects.toThrow("process.exit");
+
+    // レビューやコード生成に進んでいないこと
+    expect(mockCodex.reviewPlan).not.toHaveBeenCalled();
+    expect(mockClaudeCode.generateCode).not.toHaveBeenCalled();
+  });
+
+  it("初回プラン生成が空白のみでもエラー停止する", async () => {
+    mockClaudeCode.generatePlan.mockResolvedValue({
+      response: "   \n  \n  ",
+      raw: { exitCode: 0, stdout: "", stderr: "" },
+    });
+
+    await expect(runWorkflow(defaultOptions)).rejects.toThrow("process.exit");
+    expect(mockCodex.reviewPlan).not.toHaveBeenCalled();
+  });
+
+  it("ループ内プラン修正後が空でエラー停止する", async () => {
+    // 初回は正常なプランを返す
+    mockClaudeCode.generatePlan
+      .mockResolvedValueOnce({
+        response: "Valid plan",
+        raw: { exitCode: 0, stdout: "", stderr: "" },
+      })
+      // 修正後は空を返す
+      .mockResolvedValueOnce({
+        response: "",
+        raw: { exitCode: 0, stdout: "", stderr: "" },
+      });
+
+    mockCodex.reviewPlan.mockResolvedValue({
+      response: "Has issues",
+      raw: { exitCode: 0, stdout: "", stderr: "" },
+    });
+
+    // レビューで懸念あり → 修正フェーズに進む
+    mockJudgeReview.mockResolvedValue(
+      makeJudgment(true, [{ severity: "P2", description: "Issue" }]),
+    );
+
+    await expect(runWorkflow(defaultOptions)).rejects.toThrow("process.exit");
+
+    // 修正が呼ばれたこと（2回目のgeneratePlan）
+    expect(mockClaudeCode.generatePlan).toHaveBeenCalledTimes(2);
+    // コード生成には進んでいないこと
+    expect(mockClaudeCode.generateCode).not.toHaveBeenCalled();
+  });
+
   it("Git リポジトリ外でコードレビュー前にエラーで停止する", async () => {
     mockClaudeCode.generatePlan.mockResolvedValue({
       response: "Plan",

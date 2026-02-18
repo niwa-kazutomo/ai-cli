@@ -37,7 +37,7 @@ export interface CapabilityCheckResult {
 }
 
 export interface SessionState {
-  claudeSessionId: string;
+  claudeSessionId: string | null;
   claudeFirstRun: boolean;
   codexSessionId: string | null;
   codexFirstRun: boolean;

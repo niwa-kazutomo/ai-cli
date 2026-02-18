@@ -134,7 +134,6 @@ export async function validateCapabilities(
       requiredFlags: [
         "--print",
         "--output-format",
-        "--session-id",
         "--resume",
         "--permission-mode",
         "--no-session-persistence",

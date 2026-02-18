@@ -1,10 +1,9 @@
-import { randomUUID } from "node:crypto";
 import type { SessionState } from "./types.js";
 import * as logger from "./logger.js";
 
 export function createSession(): SessionState {
   return {
-    claudeSessionId: randomUUID(),
+    claudeSessionId: null,
     claudeFirstRun: true,
     codexSessionId: null,
     codexFirstRun: true,

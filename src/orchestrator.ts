@@ -46,11 +46,16 @@ export async function runWorkflow(options: OrchestratorOptions): Promise<void> {
   ui.display("📝 Step 1: プラン生成を開始します...");
   logger.verbose("プロンプト", prompt);
 
-  // Step 2: Generate plan
   const planPrompt = PROMPTS.PLAN_GENERATION(prompt);
   let planResult = await claudeCode.generatePlan(session, planPrompt, claudeOpts);
   let currentPlan = planResult.response;
   logger.verbose("生成されたプラン", currentPlan);
+
+  // 空プランのバリデーション
+  if (!currentPlan.trim()) {
+    logger.error("プラン生成結果が空です。Claude Code からの応答が正しく取得できませんでした。");
+    process.exit(1);
+  }
 
   // Plan review loop
   let planIteration = 0;
@@ -60,9 +65,8 @@ export async function runWorkflow(options: OrchestratorOptions): Promise<void> {
   while (planIteration < maxPlanIterations) {
     planIteration++;
     ui.displaySeparator();
-    ui.display(`🔎 Step 3: プランレビュー (${planIteration}/${maxPlanIterations})...`);
+    ui.display(`🔎 Step 2: プランレビュー (${planIteration}/${maxPlanIterations})...`);
 
-    // Step 3: Review plan with Codex
     const reviewPrompt =
       planIteration === 1
         ? PROMPTS.PLAN_REVIEW(currentPlan)
@@ -80,8 +84,8 @@ export async function runWorkflow(options: OrchestratorOptions): Promise<void> {
     planReviewSummary = reviewOutput.slice(0, 500);
     logger.verbose("レビュー結果", reviewOutput);
 
-    // Step 3.5: Judge review
-    ui.display("⚖️ Step 3.5: レビュー判定中...");
+    // Step 2.5: Judge review
+    ui.display("⚖️ Step 2.5: レビュー判定中...");
     const judgment = await judgeReview(reviewOutput, {
       cwd,
       model: options.claudeModel,
@@ -93,7 +97,6 @@ export async function runWorkflow(options: OrchestratorOptions): Promise<void> {
       ui.display(`\n懸念事項:\n${formatConcerns(judgment)}`);
     }
 
-    // Step 4: Check if P3+ concerns exist
     if (!judgment.has_p3_plus_concerns) {
       ui.display("✅ P3以上の懸念事項はありません。プランレビュー完了。");
       break;
@@ -104,14 +107,14 @@ export async function runWorkflow(options: OrchestratorOptions): Promise<void> {
       break;
     }
 
-    // Step 4: Handle questions and revise plan
+    // Handle questions and revise plan
     let userAnswers = "";
     if (judgment.questions_for_user.length > 0) {
       userAnswers = await ui.askQuestions(judgment.questions_for_user);
     }
 
     ui.displaySeparator();
-    ui.display("🔄 Step 4: プランを修正中...");
+    ui.display("🔄 Step 3: プランを修正中...");
     const revisionPrompt = PROMPTS.PLAN_REVISION(
       formatConcerns(judgment),
       userAnswers || undefined,
@@ -119,9 +122,15 @@ export async function runWorkflow(options: OrchestratorOptions): Promise<void> {
     planResult = await claudeCode.generatePlan(session, revisionPrompt, claudeOpts);
     currentPlan = planResult.response;
     logger.verbose("修正されたプラン", currentPlan);
+
+    // 修正後プランの空チェック
+    if (!currentPlan.trim()) {
+      logger.error("プラン修正結果が空です。Claude Code からの応答が正しく取得できませんでした。");
+      process.exit(1);
+    }
   }
 
-  // Step 5: Loop limit check
+  // Loop limit check
   if (
     lastPlanJudgment &&
     lastPlanJudgment.has_p3_plus_concerns &&
@@ -131,7 +140,6 @@ export async function runWorkflow(options: OrchestratorOptions): Promise<void> {
     ui.display(MESSAGES.LOOP_LIMIT_WARNING("プラン", maxPlanIterations));
     ui.display(`\n残存懸念事項:\n${formatConcerns(lastPlanJudgment)}`);
 
-    // Step 5.5: Confirm continuation
     const shouldContinue = await ui.confirmYesNo(MESSAGES.UNRESOLVED_CONCERNS_CONTINUE);
     if (!shouldContinue) {
       ui.display(MESSAGES.WORKFLOW_ABORTED);
@@ -139,7 +147,7 @@ export async function runWorkflow(options: OrchestratorOptions): Promise<void> {
     }
   }
 
-  // Step 6: Present plan and get approval
+  // Present plan and get approval
   ui.displaySeparator();
   ui.display("📋 完成したプラン:");
   ui.displaySeparator();
@@ -152,7 +160,7 @@ export async function runWorkflow(options: OrchestratorOptions): Promise<void> {
     return;
   }
 
-  // Step 6.5: Code generation confirmation
+  // Code generation confirmation
   const codeConfirmed = await ui.confirmYesNo(MESSAGES.CODE_GEN_CONFIRM);
   if (!codeConfirmed) {
     ui.display(MESSAGES.WORKFLOW_ABORTED);
@@ -161,9 +169,8 @@ export async function runWorkflow(options: OrchestratorOptions): Promise<void> {
 
   // ===== Code Phase =====
   ui.displaySeparator();
-  ui.display("💻 Step 7: コード生成を開始します...");
+  ui.display("💻 Step 4: コード生成を開始します...");
 
-  // Step 7: Generate code
   const codePrompt = PROMPTS.CODE_GENERATION();
   const codeResult = await claudeCode.generateCode(session, codePrompt, claudeOpts);
   logger.verbose("コード生成結果", codeResult.response);
@@ -175,9 +182,8 @@ export async function runWorkflow(options: OrchestratorOptions): Promise<void> {
   while (codeIteration < maxCodeIterations) {
     codeIteration++;
     ui.displaySeparator();
-    ui.display(`🔎 Step 8: コードレビュー (${codeIteration}/${maxCodeIterations})...`);
+    ui.display(`🔎 Step 5: コードレビュー (${codeIteration}/${maxCodeIterations})...`);
 
-    // Step 8: Check Git repo and changes
     const isGitRepo = await codex.checkGitRepo(cwd);
     if (!isGitRepo) {
       logger.error(MESSAGES.NO_GIT_REPO);
@@ -195,8 +201,8 @@ export async function runWorkflow(options: OrchestratorOptions): Promise<void> {
     const codeReviewOutput = codeReviewResult.response;
     logger.verbose("コードレビュー結果", codeReviewOutput);
 
-    // Step 8.5: Judge code review
-    ui.display("⚖️ Step 8.5: コードレビュー判定中...");
+    // Step 5.5: Judge code review
+    ui.display("⚖️ Step 5.5: コードレビュー判定中...");
     const codeJudgment = await judgeReview(codeReviewOutput, {
       cwd,
       model: options.claudeModel,
@@ -218,15 +224,15 @@ export async function runWorkflow(options: OrchestratorOptions): Promise<void> {
       break;
     }
 
-    // Step 9: Revise code
+    // Step 6: Revise code
     ui.displaySeparator();
-    ui.display("🔄 Step 9: コードを修正中...");
+    ui.display("🔄 Step 6: コードを修正中...");
     const codeRevisionPrompt = PROMPTS.CODE_REVISION(formatConcerns(codeJudgment));
     await claudeCode.generateCode(session, codeRevisionPrompt, claudeOpts);
     logger.verbose("コード修正完了");
   }
 
-  // Step 10: Loop limit check
+  // Loop limit check
   if (
     lastCodeJudgment &&
     lastCodeJudgment.has_p3_plus_concerns &&
@@ -236,7 +242,6 @@ export async function runWorkflow(options: OrchestratorOptions): Promise<void> {
     ui.display(MESSAGES.LOOP_LIMIT_WARNING("コード", maxCodeIterations));
     ui.display(`\n残存懸念事項:\n${formatConcerns(lastCodeJudgment)}`);
 
-    // Step 10.5: Final confirmation
     const shouldFinish = await ui.confirmYesNo(MESSAGES.UNRESOLVED_CONCERNS_FINISH);
     if (!shouldFinish) {
       ui.display(MESSAGES.WORKFLOW_ABORTED);
@@ -244,7 +249,7 @@ export async function runWorkflow(options: OrchestratorOptions): Promise<void> {
     }
   }
 
-  // Step 11: Complete
+  // Complete
   ui.displaySeparator();
   ui.display(MESSAGES.WORKFLOW_COMPLETE);
 }

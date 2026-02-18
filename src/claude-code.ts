@@ -13,9 +13,31 @@ export interface ClaudeCodeOptions {
 
 function buildSessionArgs(session: SessionState): string[] {
   if (session.claudeFirstRun) {
-    return ["--session-id", session.claudeSessionId];
+    // 初回は --session-id を渡さない（レスポンスから session_id を取得する）
+    return [];
+  }
+  if (!session.claudeSessionId) {
+    throw new Error(
+      "claudeFirstRun=false ですが claudeSessionId が未設定です。セッション管理に不整合があります。",
+    );
   }
   return ["--resume", session.claudeSessionId];
+}
+
+/**
+ * Claude Code の JSON レスポンスから session_id フィールドを抽出する。
+ * 抽出失敗時は null を返す。
+ */
+export function extractSessionId(stdout: string): string | null {
+  try {
+    const parsed = JSON.parse(stdout);
+    if (typeof parsed === "object" && parsed !== null && typeof parsed.session_id === "string") {
+      return parsed.session_id;
+    }
+  } catch {
+    logger.debug("Claude Code の session_id 抽出: JSON パース失敗");
+  }
+  return null;
 }
 
 /**
@@ -83,13 +105,24 @@ export async function generatePlan(
     onStderr: options.onStderr,
   });
 
-  markClaudeUsed(session);
-
   if (result.exitCode !== 0) {
     throw new Error(
       `Claude Code のプラン生成が失敗しました (exit code: ${result.exitCode})\n${result.stderr}`,
     );
   }
+
+  // 初回実行時: レスポンスから session_id を取得
+  if (session.claudeFirstRun) {
+    const sessionId = extractSessionId(result.stdout);
+    if (!sessionId) {
+      throw new Error(
+        "Claude Code のレスポンスから session_id を取得できませんでした。セッション継続が必要なワークフローのため停止します。",
+      );
+    }
+    session.claudeSessionId = sessionId;
+  }
+
+  markClaudeUsed(session);
 
   return { response: extractResponse(result.stdout), raw: result };
 }
@@ -128,13 +161,24 @@ export async function generateCode(
     onStderr: options.onStderr,
   });
 
-  markClaudeUsed(session);
-
   if (result.exitCode !== 0) {
     throw new Error(
       `Claude Code のコード生成が失敗しました (exit code: ${result.exitCode})\n${result.stderr}`,
     );
   }
+
+  // 初回実行時（通常ありえないが防御的に）: session_id を取得
+  if (session.claudeFirstRun) {
+    const sessionId = extractSessionId(result.stdout);
+    if (!sessionId) {
+      throw new Error(
+        "Claude Code のレスポンスから session_id を取得できませんでした。セッション継続が必要なワークフローのため停止します。",
+      );
+    }
+    session.claudeSessionId = sessionId;
+  }
+
+  markClaudeUsed(session);
 
   return { response: extractResponse(result.stdout), raw: result };
 }

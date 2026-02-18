@@ -181,6 +181,29 @@ export function hasNoConcernsIndicator(text: string): boolean {
 }
 
 /**
+ * レビュー対象が不在・レビュー実施不能であることを示すインジケータを検出する。
+ * コードブロック内のテキストは除外する。
+ */
+export function hasUnableToReviewIndicator(text: string): boolean {
+  const cleaned = stripCodeBlocks(text);
+
+  const patterns = [
+    /レビュー対象が含まれておらず/,
+    /レビュー対象が含まれていません/,
+    /レビュー対象が(?:ありません|ない|存在しません|見当たりません)/,
+    /レビューを実施できない/,
+    /レビューを行うことができません/,
+    /レビュー(?:が|を)実施できません/,
+    /レビューする(?:内容|対象)が(?:ありません|ない)/,
+    /nothing to review/i,
+    /no (?:code |changes )?to review/i,
+    /unable to (?:perform |conduct )?review/i,
+  ];
+
+  return patterns.some((pattern) => pattern.test(cleaned));
+}
+
+/**
  * コードブロック除去後のテキストに裸の P0〜P3 トークンが含まれるか検出する。
  * マーカー形式 [Pn] は除外した上で検出する。
  */
@@ -254,7 +277,15 @@ export async function judgeReview(
     return createFailSafeJudgment();
   }
 
-  // 優先3: マーカーなし + 裸トークンなし + 「懸念事項なし」 → PASS
+  // 優先3: マーカーなし + 裸トークンなし + レビュー不能インジケータ → fail-safe
+  if (hasUnableToReviewIndicator(text)) {
+    logger.warn(
+      "レビュー対象不在または実施不能のインジケータが検出されました。安全側に倒します。",
+    );
+    return createFailSafeJudgment();
+  }
+
+  // 優先4: マーカーなし + 裸トークンなし + 「懸念事項なし」 → PASS
   if (hasNoConcernsIndicator(text)) {
     return {
       has_p3_plus_concerns: false,
@@ -264,7 +295,7 @@ export async function judgeReview(
     };
   }
 
-  // 優先4: マーカーなし + 裸トークンなし + テキストあり → PASS + warn
+  // 優先5: マーカーなし + 裸トークンなし + テキストあり → PASS + warn
   logger.warn(
     "マーカー形式の懸念事項が検出されませんでした。懸念事項なしとして扱います。",
   );

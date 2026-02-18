@@ -8,22 +8,13 @@ import {
 } from "../src/session.js";
 
 describe("createSession", () => {
-  it("有効な UUID でセッションを生成する", () => {
+  it("claudeSessionId が null で初期化される", () => {
     const session = createSession();
 
-    expect(session.claudeSessionId).toMatch(
-      /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/,
-    );
+    expect(session.claudeSessionId).toBeNull();
     expect(session.claudeFirstRun).toBe(true);
     expect(session.codexSessionId).toBeNull();
     expect(session.codexFirstRun).toBe(true);
-  });
-
-  it("呼び出すたびに異なる UUID を生成する", () => {
-    const session1 = createSession();
-    const session2 = createSession();
-
-    expect(session1.claudeSessionId).not.toBe(session2.claudeSessionId);
   });
 });
 

@@ -9,6 +9,7 @@ import {
   extractSummaryFromText,
   hasNoConcernsIndicator,
   hasBareSeverityTokens,
+  hasUnableToReviewIndicator,
 } from "../src/review-judge.js";
 import type { ReviewJudgment, ReviewConcern } from "../src/types.js";
 
@@ -428,6 +429,58 @@ describe("hasBareSeverityTokens", () => {
   });
 });
 
+describe("hasUnableToReviewIndicator", () => {
+  it("「レビュー対象が含まれておらず」を検出する", () => {
+    expect(hasUnableToReviewIndicator("レビュー対象が含まれておらず、レビューできません")).toBe(true);
+  });
+
+  it("「レビュー対象が含まれていません」を検出する（プロンプト指示文言）", () => {
+    expect(hasUnableToReviewIndicator("レビュー対象が含まれていません")).toBe(true);
+  });
+
+  it("「レビューを実施できない」を検出する", () => {
+    expect(hasUnableToReviewIndicator("計画が空のためレビューを実施できない")).toBe(true);
+  });
+
+  it("「レビュー対象がありません」を検出する", () => {
+    expect(hasUnableToReviewIndicator("レビュー対象がありません")).toBe(true);
+  });
+
+  it("「レビューする内容がありません」を検出する", () => {
+    expect(hasUnableToReviewIndicator("レビューする内容がありません")).toBe(true);
+  });
+
+  it("「レビューを行うことができません」を検出する", () => {
+    expect(hasUnableToReviewIndicator("レビューを行うことができません")).toBe(true);
+  });
+
+  it("英語 'nothing to review' を検出する", () => {
+    expect(hasUnableToReviewIndicator("There is nothing to review")).toBe(true);
+  });
+
+  it("英語 'no code to review' を検出する", () => {
+    expect(hasUnableToReviewIndicator("No code to review")).toBe(true);
+  });
+
+  it("英語 'unable to review' を検出する", () => {
+    expect(hasUnableToReviewIndicator("Unable to perform review")).toBe(true);
+  });
+
+  it("コードブロック内のテキストは除外する", () => {
+    expect(
+      hasUnableToReviewIndicator("```\nレビュー対象がありません\n```\n問題なし"),
+    ).toBe(false);
+  });
+
+  it("通常のレビュー結果では false を返す", () => {
+    expect(hasUnableToReviewIndicator("全体的に問題ありません。懸念事項なし")).toBe(false);
+  });
+
+  it("レビュー内容がある通常テキストでは false", () => {
+    expect(hasUnableToReviewIndicator("- [P2] 設計上の問題があります")).toBe(false);
+  });
+});
+
 // --- judgeReview 統合テスト ---
 
 describe("judgeReview", () => {
@@ -547,6 +600,35 @@ describe("judgeReview", () => {
     const { judgeReview } = await import("../src/review-judge.js");
     const result = await judgeReview("review output", { cwd: "/tmp" });
 
+    expect(result.has_p3_plus_concerns).toBe(true);
+    expect(result.concerns[0].severity).toBe("P0");
+  });
+
+  it("レビュー不能インジケータ → fail-safe", async () => {
+    runCliMock.mockResolvedValue({
+      exitCode: 0,
+      stdout: "レビュー対象が含まれておらず、レビューを実施できません。",
+      stderr: "",
+    });
+
+    const { judgeReview } = await import("../src/review-judge.js");
+    const result = await judgeReview("review output", { cwd: "/tmp" });
+
+    expect(result.has_p3_plus_concerns).toBe(true);
+    expect(result.concerns[0].severity).toBe("P0");
+  });
+
+  it("「懸念事項なし」+「レビュー不能」混在時に fail-safe になる", async () => {
+    runCliMock.mockResolvedValue({
+      exitCode: 0,
+      stdout: "懸念事項なし\nレビュー対象がありません",
+      stderr: "",
+    });
+
+    const { judgeReview } = await import("../src/review-judge.js");
+    const result = await judgeReview("review output", { cwd: "/tmp" });
+
+    // レビュー不能が優先され fail-safe になること
     expect(result.has_p3_plus_concerns).toBe(true);
     expect(result.concerns[0].severity).toBe("P0");
   });
