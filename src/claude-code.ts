@@ -186,8 +186,6 @@ export async function generatePlan(
     "--output-format",
     "json",
     ...buildSessionArgs(session),
-    "--permission-mode",
-    "plan",
   ];
 
   if (options.model) {
@@ -218,6 +216,12 @@ export async function generatePlan(
   markClaudeUsed(session);
 
   const response = streamResult?.response ?? extractResponse(result.stdout);
+
+  if (!response.trim()) {
+    const summary = `exitCode: ${result.exitCode}, stdout(${result.stdout.length}chars): ${result.stdout.slice(0, 200)}${result.stdout.length > 200 ? "..." : ""}\nstderr(${result.stderr.length}chars): ${result.stderr.slice(-200)}`;
+    logger.debug("generatePlan: 空レスポンス検出", summary);
+  }
+
   return { response, raw: result };
 }
 

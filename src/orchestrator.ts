@@ -97,6 +97,8 @@ export async function runWorkflow(options: OrchestratorOptions): Promise<void> {
 
   // 空プランのバリデーション
   if (!currentPlan.trim()) {
+    const r = planResult.raw;
+    logger.debug("プラン生成結果が空", `exitCode: ${r.exitCode}, stdout(${r.stdout.length}chars): ${r.stdout.slice(0, 200)}${r.stdout.length > 200 ? "..." : ""}\nstderr(${r.stderr.length}chars): ${r.stderr.slice(-200)}`);
     throw new Error("プラン生成結果が空です。Claude Code からの応答が正しく取得できませんでした。");
   }
 
@@ -183,6 +185,8 @@ export async function runWorkflow(options: OrchestratorOptions): Promise<void> {
 
     // 修正後プランの空チェック
     if (!currentPlan.trim()) {
+      const r = planResult.raw;
+      logger.debug("プラン修正結果が空", `exitCode: ${r.exitCode}, stdout(${r.stdout.length}chars): ${r.stdout.slice(0, 200)}${r.stdout.length > 200 ? "..." : ""}\nstderr(${r.stderr.length}chars): ${r.stderr.slice(-200)}`);
       throw new Error("プラン修正結果が空です。Claude Code からの応答が正しく取得できませんでした。");
     }
   }

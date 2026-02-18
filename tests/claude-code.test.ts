@@ -180,6 +180,19 @@ describe("セッション管理フロー", () => {
 
     await expect(generatePlan(session, "test", { cwd: "/tmp" })).rejects.toThrow("不整合");
   });
+
+  it("generatePlan で --permission-mode が引数に含まれない", async () => {
+    runCliMock.mockResolvedValue({
+      exitCode: 0,
+      stdout: JSON.stringify({ session_id: "new-sess-id", result: "plan" }),
+      stderr: "",
+    });
+    const { generatePlan } = await import("../src/claude-code.js");
+    const session = { claudeSessionId: null, claudeFirstRun: true, codexSessionId: null, codexFirstRun: true };
+    await generatePlan(session, "test prompt", { cwd: "/tmp" });
+    const calledArgs = runCliMock.mock.calls[0][1].args as string[];
+    expect(calledArgs).not.toContain("--permission-mode");
+  });
 });
 
 describe("ストリーミングモード", () => {
@@ -414,5 +427,44 @@ describe("ストリーミングモード", () => {
 
     expect(result.response).toBe("json result");
     expect(session.claudeSessionId).toBe("sess-json");
+  });
+});
+
+describe("generateCode 権限引数", () => {
+  let runCliMock: ReturnType<typeof vi.fn>;
+
+  beforeEach(async () => {
+    vi.resetAllMocks();
+    const cliRunner = await import("../src/cli-runner.js");
+    runCliMock = cliRunner.runCli as ReturnType<typeof vi.fn>;
+  });
+
+  it("generateCode (dangerous=false) で --permission-mode acceptEdits が渡される", async () => {
+    runCliMock.mockResolvedValue({
+      exitCode: 0,
+      stdout: JSON.stringify({ session_id: "sess-1", result: "code" }),
+      stderr: "",
+    });
+    const { generateCode } = await import("../src/claude-code.js");
+    const session = { claudeSessionId: null, claudeFirstRun: true, codexSessionId: null, codexFirstRun: true };
+    await generateCode(session, "test", { cwd: "/tmp" });
+    const calledArgs = runCliMock.mock.calls[0][1].args as string[];
+    expect(calledArgs).toContain("--permission-mode");
+    expect(calledArgs).toContain("acceptEdits");
+    expect(calledArgs).not.toContain("--dangerously-skip-permissions");
+  });
+
+  it("generateCode (dangerous=true) で --dangerously-skip-permissions が渡される", async () => {
+    runCliMock.mockResolvedValue({
+      exitCode: 0,
+      stdout: JSON.stringify({ session_id: "sess-1", result: "code" }),
+      stderr: "",
+    });
+    const { generateCode } = await import("../src/claude-code.js");
+    const session = { claudeSessionId: null, claudeFirstRun: true, codexSessionId: null, codexFirstRun: true };
+    await generateCode(session, "test", { cwd: "/tmp", dangerous: true });
+    const calledArgs = runCliMock.mock.calls[0][1].args as string[];
+    expect(calledArgs).toContain("--dangerously-skip-permissions");
+    expect(calledArgs).not.toContain("--permission-mode");
   });
 });
