@@ -25,8 +25,7 @@ export async function runWorkflow(options: OrchestratorOptions): Promise<void> {
   ui.display("🔍 CLI の互換性をチェックしています...");
   const capError = await validateCapabilities(dangerous, cwd);
   if (capError) {
-    logger.error(capError);
-    process.exit(1);
+    throw new Error(capError);
   }
   ui.display("✅ CLI の互換性チェックに成功しました");
 
@@ -53,8 +52,7 @@ export async function runWorkflow(options: OrchestratorOptions): Promise<void> {
 
   // 空プランのバリデーション
   if (!currentPlan.trim()) {
-    logger.error("プラン生成結果が空です。Claude Code からの応答が正しく取得できませんでした。");
-    process.exit(1);
+    throw new Error("プラン生成結果が空です。Claude Code からの応答が正しく取得できませんでした。");
   }
 
   // Plan review loop
@@ -125,8 +123,7 @@ export async function runWorkflow(options: OrchestratorOptions): Promise<void> {
 
     // 修正後プランの空チェック
     if (!currentPlan.trim()) {
-      logger.error("プラン修正結果が空です。Claude Code からの応答が正しく取得できませんでした。");
-      process.exit(1);
+      throw new Error("プラン修正結果が空です。Claude Code からの応答が正しく取得できませんでした。");
     }
   }
 
@@ -186,14 +183,12 @@ export async function runWorkflow(options: OrchestratorOptions): Promise<void> {
 
     const isGitRepo = await codex.checkGitRepo(cwd);
     if (!isGitRepo) {
-      logger.error(MESSAGES.NO_GIT_REPO);
-      process.exit(1);
+      throw new Error(MESSAGES.NO_GIT_REPO);
     }
 
     const hasChanges = await codex.checkGitChanges(cwd);
     if (!hasChanges) {
-      logger.error(MESSAGES.NO_GIT_CHANGES);
-      process.exit(1);
+      throw new Error(MESSAGES.NO_GIT_CHANGES);
     }
 
     // Code review with Codex

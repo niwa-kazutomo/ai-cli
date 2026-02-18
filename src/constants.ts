@@ -1,3 +1,11 @@
+export const REPL_PROMPT = "ai> ";
+export const REPL_MESSAGES = {
+  WELCOME: (version: string) =>
+    `\n🤖 AI CLI v${version} - インタラクティブモード\nプロンプトを入力してください。終了: "exit" / "quit" / Ctrl+D\n\n`,
+  GOODBYE: "👋 終了します。",
+  NEXT_PROMPT: "次のプロンプトを入力してください。",
+} as const;
+
 export const DEFAULT_TIMEOUT_MS = 10 * 60 * 1000; // 10 minutes
 export const DEFAULT_MAX_PLAN_ITERATIONS = 5;
 export const DEFAULT_MAX_CODE_ITERATIONS = 5;

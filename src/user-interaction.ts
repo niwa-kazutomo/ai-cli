@@ -1,5 +1,6 @@
 import { createInterface } from "node:readline";
 import type { ReviewQuestion } from "./types.js";
+import { SigintError } from "./errors.js";
 
 function createReadlineInterface() {
   return createInterface({
@@ -10,14 +11,78 @@ function createReadlineInterface() {
 
 /**
  * ユーザーに yes/no の確認を求める。
+ * Ctrl+C (SIGINT) → SigintError を reject。
+ * EOF (close) → false を resolve。
  */
 export async function confirmYesNo(message: string): Promise<boolean> {
   const rl = createReadlineInterface();
-  return new Promise((resolve) => {
-    rl.question(message, (answer) => {
+  return new Promise((resolve, reject) => {
+    let settled = false;
+    let interrupted = false;
+
+    rl.on("SIGINT", () => {
+      interrupted = true;
       rl.close();
-      const normalized = answer.trim().toLowerCase();
-      resolve(normalized === "yes" || normalized === "y");
+    });
+
+    rl.on("close", () => {
+      if (!settled) {
+        settled = true;
+        if (interrupted) {
+          reject(new SigintError());
+        } else {
+          resolve(false);
+        }
+      }
+    });
+
+    rl.question(message, (answer) => {
+      if (!settled) {
+        settled = true;
+        rl.close();
+        const normalized = answer.trim().toLowerCase();
+        resolve(normalized === "yes" || normalized === "y");
+      }
+    });
+  });
+}
+
+/**
+ * readline の question を SIGINT/close セーフにラップする。
+ * per-question スコープで settled/interrupted を管理する。
+ */
+function safeQuestion(
+  rl: ReturnType<typeof createInterface>,
+  prompt: string,
+): Promise<string> {
+  return new Promise((resolve, reject) => {
+    let settled = false;
+    let interrupted = false;
+
+    const onSigint = () => {
+      interrupted = true;
+      rl.close();
+    };
+    const onClose = () => {
+      if (!settled) {
+        settled = true;
+        rl.removeListener("SIGINT", onSigint);
+        rl.removeListener("close", onClose);
+        // Ctrl+C (SIGINT) も Ctrl+D (EOF) もワークフロー中断として扱う
+        reject(new SigintError());
+      }
+    };
+
+    rl.on("SIGINT", onSigint);
+    rl.on("close", onClose);
+
+    rl.question(prompt, (answer) => {
+      if (!settled) {
+        settled = true;
+        rl.removeListener("SIGINT", onSigint);
+        rl.removeListener("close", onClose);
+        resolve(answer);
+      }
     });
   });
 }
@@ -33,31 +98,28 @@ export async function askQuestions(
   const rl = createReadlineInterface();
   const answers: string[] = [];
 
-  for (const q of questions) {
-    await new Promise<void>((resolve) => {
+  try {
+    for (const q of questions) {
       process.stderr.write(`\n📋 ${q.question}\n`);
       q.choices.forEach((choice, i) => {
         process.stderr.write(`  ${i + 1}. ${choice}\n`);
       });
       process.stderr.write(`  0. その他（自由入力）\n`);
 
-      rl.question("選択してください (番号): ", (answer) => {
-        const num = parseInt(answer.trim(), 10);
-        if (num > 0 && num <= q.choices.length) {
-          answers.push(`Q: ${q.question}\nA: ${q.choices[num - 1]}`);
-          resolve();
-        } else {
-          // 自由入力
-          rl.question("回答を入力してください: ", (freeAnswer) => {
-            answers.push(`Q: ${q.question}\nA: ${freeAnswer.trim()}`);
-            resolve();
-          });
-        }
-      });
-    });
+      const answer = await safeQuestion(rl, "選択してください (番号): ");
+      const num = parseInt(answer.trim(), 10);
+
+      if (num > 0 && num <= q.choices.length) {
+        answers.push(`Q: ${q.question}\nA: ${q.choices[num - 1]}`);
+      } else {
+        const freeAnswer = await safeQuestion(rl, "回答を入力してください: ");
+        answers.push(`Q: ${q.question}\nA: ${freeAnswer.trim()}`);
+      }
+    }
+  } finally {
+    rl.close();
   }
 
-  rl.close();
   return answers.join("\n\n");
 }
 

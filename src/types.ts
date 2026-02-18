@@ -55,4 +55,6 @@ export interface OrchestratorOptions {
   cwd: string;
 }
 
+export type ReplOptions = Omit<OrchestratorOptions, "prompt">;
+
 export type LogLevel = "info" | "verbose" | "debug" | "warn" | "error";

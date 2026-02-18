@@ -4,9 +4,9 @@
   "description": "AI CLI tool that orchestrates Claude Code and Codex for high-quality code generation",
   "type": "module",
   "scripts": {
-    "build": "bun build --compile --minify src/index.ts --outfile dist/ai",
+    "build": "bun build --compile --minify src/main.ts --outfile dist/ai",
     "build:check": "tsc --noEmit",
-    "dev": "bun run src/index.ts",
+    "dev": "bun run src/main.ts",
     "test": "vitest run",
     "test:watch": "vitest"
   },

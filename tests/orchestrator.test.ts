@@ -72,10 +72,6 @@ function makeJudgment(hasConcerns: boolean, concerns: ReviewJudgment["concerns"]
 describe("orchestrator", () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    // process.exit のモック
-    vi.spyOn(process, "exit").mockImplementation((() => {
-      throw new Error("process.exit called");
-    }) as never);
   });
 
   it("懸念なしでワークフローが正常完了する", async () => {
@@ -220,7 +216,7 @@ describe("orchestrator", () => {
       raw: { exitCode: 0, stdout: "", stderr: "" },
     });
 
-    await expect(runWorkflow(defaultOptions)).rejects.toThrow("process.exit");
+    await expect(runWorkflow(defaultOptions)).rejects.toThrow("プラン生成結果が空です");
 
     // レビューやコード生成に進んでいないこと
     expect(mockCodex.reviewPlan).not.toHaveBeenCalled();
@@ -233,7 +229,7 @@ describe("orchestrator", () => {
       raw: { exitCode: 0, stdout: "", stderr: "" },
     });
 
-    await expect(runWorkflow(defaultOptions)).rejects.toThrow("process.exit");
+    await expect(runWorkflow(defaultOptions)).rejects.toThrow("プラン生成結果が空です");
     expect(mockCodex.reviewPlan).not.toHaveBeenCalled();
   });
 
@@ -260,7 +256,7 @@ describe("orchestrator", () => {
       makeJudgment(true, [{ severity: "P2", description: "Issue" }]),
     );
 
-    await expect(runWorkflow(defaultOptions)).rejects.toThrow("process.exit");
+    await expect(runWorkflow(defaultOptions)).rejects.toThrow("プラン修正結果が空です");
 
     // 修正が呼ばれたこと（2回目のgeneratePlan）
     expect(mockClaudeCode.generatePlan).toHaveBeenCalledTimes(2);
@@ -290,6 +286,6 @@ describe("orchestrator", () => {
     // Not a git repo
     mockCodex.checkGitRepo.mockResolvedValue(false);
 
-    await expect(runWorkflow(defaultOptions)).rejects.toThrow("process.exit");
+    await expect(runWorkflow(defaultOptions)).rejects.toThrow("Git リポジトリ");
   });
 });
