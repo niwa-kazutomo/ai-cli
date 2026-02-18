@@ -37,6 +37,11 @@ async function runWithProgress<T>(
 export async function runWorkflow(options: OrchestratorOptions): Promise<void> {
   const { prompt, maxPlanIterations, maxCodeIterations, dangerous, cwd } = options;
   const shouldStream = options.verbose || options.debug;
+  const stdoutCallback = shouldStream
+    ? (chunk: string) => {
+        process.stderr.write(chunk);
+      }
+    : undefined;
   const stderrCallback = shouldStream
     ? (chunk: string) => {
         process.stderr.write(chunk);
@@ -56,11 +61,13 @@ export async function runWorkflow(options: OrchestratorOptions): Promise<void> {
     cwd,
     model: options.claudeModel,
     dangerous,
+    onStdout: stdoutCallback,
     onStderr: stderrCallback,
   };
   const codexOpts = {
     cwd,
     model: options.codexModel,
+    onStdout: stdoutCallback,
     onStderr: stderrCallback,
   };
 
@@ -123,6 +130,7 @@ export async function runWorkflow(options: OrchestratorOptions): Promise<void> {
         judgeReview(reviewOutput, {
           cwd,
           model: options.claudeModel,
+          onStdout: stdoutCallback,
           onStderr: stderrCallback,
         }),
     );
@@ -246,6 +254,7 @@ export async function runWorkflow(options: OrchestratorOptions): Promise<void> {
       judgeReview(codeReviewOutput, {
         cwd,
         model: options.claudeModel,
+        onStdout: stdoutCallback,
         onStderr: stderrCallback,
       }),
     );

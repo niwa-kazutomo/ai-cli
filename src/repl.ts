@@ -40,8 +40,15 @@ function promptOnce(): Promise<string | null> {
   });
 }
 
-export async function startRepl(options: ReplOptions, version: string): Promise<void> {
+export async function startRepl(
+  options: ReplOptions,
+  version: string,
+  activeOptionsLine?: string | null,
+): Promise<void> {
   process.stderr.write(REPL_MESSAGES.WELCOME(version));
+  if (activeOptionsLine) {
+    process.stderr.write(activeOptionsLine + "\n");
+  }
 
   while (true) {
     const result = await promptOnce();

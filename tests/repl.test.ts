@@ -261,4 +261,38 @@ describe("startRepl", () => {
 
     stderrSpy.mockRestore();
   });
+
+  it("activeOptionsLine 未指定 → ⚙ オプション を含む出力がない", async () => {
+    const stderrSpy = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+
+    const replPromise = startRepl(defaultReplOptions, "0.1.0");
+    await answerPrompt("exit");
+    await replPromise;
+
+    const allCalls = stderrSpy.mock.calls.map((c) => String(c[0]));
+    expect(allCalls.some((s) => s.includes("⚙ オプション"))).toBe(false);
+
+    stderrSpy.mockRestore();
+  });
+
+  it("activeOptionsLine 指定 → ウェルカムメッセージの後にオプション行が出力される", async () => {
+    const stderrSpy = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+
+    const replPromise = startRepl(
+      defaultReplOptions,
+      "0.1.0",
+      "⚙ オプション: --debug",
+    );
+    await answerPrompt("exit");
+    await replPromise;
+
+    const allCalls = stderrSpy.mock.calls.map((c) => String(c[0]));
+    // ウェルカムメッセージの後にオプション行がある
+    const welcomeIdx = allCalls.findIndex((s) => s.includes("AI CLI"));
+    const optionsIdx = allCalls.findIndex((s) => s.includes("⚙ オプション: --debug"));
+    expect(welcomeIdx).toBeGreaterThanOrEqual(0);
+    expect(optionsIdx).toBeGreaterThan(welcomeIdx);
+
+    stderrSpy.mockRestore();
+  });
 });

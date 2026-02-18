@@ -526,6 +526,23 @@ describe("judgeReview", () => {
     );
   });
 
+  it("onStdout を受け取り runCli に伝搬する", async () => {
+    runCliMock.mockResolvedValue({
+      exitCode: 0,
+      stdout: "### 概要\n問題なし\n\n### 懸念事項\n懸念事項なし",
+      stderr: "",
+    });
+
+    const onStdout = vi.fn();
+    const { judgeReview } = await import("../src/review-judge.js");
+    await judgeReview("review output", { cwd: "/tmp", onStdout });
+
+    expect(runCliMock).toHaveBeenCalledWith(
+      "claude",
+      expect.objectContaining({ onStdout }),
+    );
+  });
+
   it("マーカーなし + 裸トークン P1 あり → fail-safe", async () => {
     runCliMock.mockResolvedValue({
       exitCode: 0,

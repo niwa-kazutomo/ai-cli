@@ -2,6 +2,7 @@ import { Command } from "commander";
 import { runWorkflow } from "./orchestrator.js";
 import { startRepl } from "./repl.js";
 import { configureLogger } from "./logger.js";
+import { display } from "./user-interaction.js";
 import { SigintError } from "./errors.js";
 import {
   DEFAULT_MAX_PLAN_ITERATIONS,
@@ -29,6 +30,27 @@ function setupLogger(opts: Record<string, unknown>): void {
     verbose: Boolean(opts.verbose) || Boolean(opts.debug),
     debug: Boolean(opts.debug),
   });
+}
+
+export function formatActiveOptions(options: ReplOptions): string | null {
+  const parts: string[] = [];
+
+  if (options.debug) parts.push("--debug");
+  if (options.verbose) parts.push("--verbose");
+  if (options.dangerous) parts.push("--dangerous");
+  if (options.claudeModel !== undefined)
+    parts.push(`--claude-model ${JSON.stringify(options.claudeModel)}`);
+  if (options.codexModel !== undefined)
+    parts.push(`--codex-model ${JSON.stringify(options.codexModel)}`);
+  if (options.maxPlanIterations !== DEFAULT_MAX_PLAN_ITERATIONS)
+    parts.push(`--max-plan-iterations ${String(options.maxPlanIterations)}`);
+  if (options.maxCodeIterations !== DEFAULT_MAX_CODE_ITERATIONS)
+    parts.push(`--max-code-iterations ${String(options.maxCodeIterations)}`);
+  if (options.cwd !== process.cwd())
+    parts.push(`--cwd ${JSON.stringify(options.cwd)}`);
+
+  if (parts.length === 0) return null;
+  return `⚙ オプション: ${parts.join(" ")}`;
 }
 
 export function createProgram(): Command {
@@ -70,11 +92,14 @@ export function createProgram(): Command {
     .option("--cwd <dir>", "作業ディレクトリ指定", process.cwd())
     .action(async (prompt: string | undefined, opts) => {
       setupLogger(opts);
+      const workflowOptions = buildWorkflowOptions(opts);
+      const activeOptionsLine = formatActiveOptions(workflowOptions);
 
       if (prompt) {
         // シングルショット
+        if (activeOptionsLine) display(activeOptionsLine);
         try {
-          await runWorkflow({ prompt, ...buildWorkflowOptions(opts) });
+          await runWorkflow({ prompt, ...workflowOptions });
         } catch (err) {
           if (err instanceof SigintError) {
             process.exit(130);
@@ -86,7 +111,7 @@ export function createProgram(): Command {
         }
       } else {
         // REPL
-        await startRepl(buildWorkflowOptions(opts), VERSION);
+        await startRepl(workflowOptions, VERSION, activeOptionsLine);
       }
     });
 

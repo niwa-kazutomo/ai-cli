@@ -293,7 +293,7 @@ describe("orchestrator", () => {
     await expect(runWorkflow(defaultOptions)).rejects.toThrow("Git リポジトリ");
   });
 
-  it("verbose=true の場合は onStderr が各 LLM 呼び出しに渡される", async () => {
+  it("verbose=true の場合は onStdout/onStderr が各 LLM 呼び出しに渡される", async () => {
     const opts = { ...defaultOptions, verbose: true };
 
     mockClaudeCode.generatePlan.mockResolvedValue({
@@ -317,12 +317,15 @@ describe("orchestrator", () => {
 
     await runWorkflow(opts);
 
+    expect(mockClaudeCode.generatePlan.mock.calls[0][2].onStdout).toEqual(expect.any(Function));
+    expect(mockCodex.reviewPlan.mock.calls[0][2].onStdout).toEqual(expect.any(Function));
+    expect(mockJudgeReview.mock.calls[0][1].onStdout).toEqual(expect.any(Function));
     expect(mockClaudeCode.generatePlan.mock.calls[0][2].onStderr).toEqual(expect.any(Function));
     expect(mockCodex.reviewPlan.mock.calls[0][2].onStderr).toEqual(expect.any(Function));
     expect(mockJudgeReview.mock.calls[0][1].onStderr).toEqual(expect.any(Function));
   });
 
-  it("verbose=false かつ debug=false の場合は onStderr が undefined", async () => {
+  it("verbose=false かつ debug=false の場合は onStdout/onStderr が undefined", async () => {
     mockClaudeCode.generatePlan.mockResolvedValue({
       response: "Generated plan",
       raw: { exitCode: 0, stdout: "", stderr: "" },
@@ -344,12 +347,15 @@ describe("orchestrator", () => {
 
     await runWorkflow(defaultOptions);
 
+    expect(mockClaudeCode.generatePlan.mock.calls[0][2].onStdout).toBeUndefined();
+    expect(mockCodex.reviewPlan.mock.calls[0][2].onStdout).toBeUndefined();
+    expect(mockJudgeReview.mock.calls[0][1].onStdout).toBeUndefined();
     expect(mockClaudeCode.generatePlan.mock.calls[0][2].onStderr).toBeUndefined();
     expect(mockCodex.reviewPlan.mock.calls[0][2].onStderr).toBeUndefined();
     expect(mockJudgeReview.mock.calls[0][1].onStderr).toBeUndefined();
   });
 
-  it("debug=true（verbose=false）でも onStderr が有効になる", async () => {
+  it("debug=true（verbose=false）でも onStdout/onStderr が有効になる", async () => {
     const opts = { ...defaultOptions, verbose: false, debug: true };
 
     mockClaudeCode.generatePlan.mockResolvedValue({
@@ -373,6 +379,8 @@ describe("orchestrator", () => {
 
     await runWorkflow(opts);
 
+    expect(mockClaudeCode.generatePlan.mock.calls[0][2].onStdout).toEqual(expect.any(Function));
+    expect(mockJudgeReview.mock.calls[0][1].onStdout).toEqual(expect.any(Function));
     expect(mockClaudeCode.generatePlan.mock.calls[0][2].onStderr).toEqual(expect.any(Function));
     expect(mockJudgeReview.mock.calls[0][1].onStderr).toEqual(expect.any(Function));
   });
