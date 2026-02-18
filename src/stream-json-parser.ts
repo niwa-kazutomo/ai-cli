@@ -2,9 +2,9 @@
  * Claude CLI の stream-json (JSONL) 出力をリアルタイムにパースするモジュール。
  */
 
-/** stream-json の各イベント型 */
+/** stream-json の各イベント型（Codex は type なしの行も出力しうる） */
 export interface StreamJsonEvent {
-  type: string;
+  type?: string;
   /* eslint-disable @typescript-eslint/no-explicit-any */
   [key: string]: any;
 }
@@ -36,7 +36,7 @@ export class StreamJsonLineBuffer {
       if (trimmed === "") continue;
       try {
         const parsed = JSON.parse(trimmed);
-        if (typeof parsed === "object" && parsed !== null && typeof parsed.type === "string") {
+        if (typeof parsed === "object" && parsed !== null) {
           events.push(parsed as StreamJsonEvent);
         }
       } catch {
@@ -53,7 +53,7 @@ export class StreamJsonLineBuffer {
     if (remaining === "") return [];
     try {
       const parsed = JSON.parse(remaining);
-      if (typeof parsed === "object" && parsed !== null && typeof parsed.type === "string") {
+      if (typeof parsed === "object" && parsed !== null) {
         return [parsed as StreamJsonEvent];
       }
     } catch {
@@ -82,7 +82,65 @@ export function extractTextFromEvent(event: StreamJsonEvent): string | null {
     }
   }
 
+  // eslint-disable-next-line prefer-template
   return texts.length > 0 ? texts.join("") : null;
+}
+
+/**
+ * Codex の単一イベントからテキストを抽出する。
+ * 優先順位: output_text > type: "message" の content
+ * テキストなし → null
+ */
+export function extractTextFromCodexEvent(event: StreamJsonEvent): string | null {
+  // output_text フィールドが最優先
+  if (typeof event.output_text === "string") {
+    return event.output_text;
+  }
+
+  // type: "message" + content からの抽出
+  if (event.type === "message" && event.content) {
+    if (typeof event.content === "string") {
+      return event.content;
+    }
+    if (Array.isArray(event.content)) {
+      const texts: string[] = [];
+      for (const block of event.content) {
+        if (block.type === "text" && typeof block.text === "string") {
+          texts.push(block.text);
+        }
+      }
+      return texts.length > 0 ? texts.join("") : null;
+    }
+  }
+
+  return null;
+}
+
+/**
+ * Codex イベント列から response と sessionId を抽出する。
+ * - テキストは全イベントから抽出し "\n" で join
+ * - sessionId は session_id フィールドのみ採用（id は使わない）
+ */
+export function extractFromCodexStreamEvents(events: StreamJsonEvent[]): StreamJsonResult {
+  const texts: string[] = [];
+  let sessionId: string | null = null;
+
+  for (const event of events) {
+    // session_id フィールドのみ採用
+    if (typeof event.session_id === "string") {
+      sessionId = event.session_id;
+    }
+
+    const text = extractTextFromCodexEvent(event);
+    if (text !== null) {
+      texts.push(text);
+    }
+  }
+
+  return {
+    response: texts.join("\n"),
+    sessionId,
+  };
 }
 
 /**

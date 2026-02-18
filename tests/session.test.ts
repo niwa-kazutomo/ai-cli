@@ -44,9 +44,14 @@ describe("extractCodexSessionId", () => {
     expect(extractCodexSessionId(jsonl)).toBe("sess-abc123");
   });
 
-  it("id フィールドを抽出する", () => {
-    const jsonl = JSON.stringify({ id: "id-xyz789" });
+  it("type: session の id フィールドを抽出する", () => {
+    const jsonl = JSON.stringify({ type: "session", id: "id-xyz789" });
     expect(extractCodexSessionId(jsonl)).toBe("id-xyz789");
+  });
+
+  it("type が session でないイベントの id は無視する", () => {
+    const jsonl = JSON.stringify({ type: "message", id: "msg_abc123" });
+    expect(extractCodexSessionId(jsonl)).toBeNull();
   });
 
   it("複数行の JSONL で最初の session_id を返す", () => {

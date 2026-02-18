@@ -30,8 +30,8 @@ export function extractCodexSessionId(jsonlOutput: string): string | null {
       if (parsed.session_id) {
         return parsed.session_id as string;
       }
-      // session ID が id フィールドに入っている場合もある
-      if (parsed.id && typeof parsed.id === "string") {
+      // session ID が id フィールドに入っている場合もある（type: "session" のイベントのみ）
+      if (parsed.id && typeof parsed.id === "string" && parsed.type === "session") {
         return parsed.id;
       }
     }

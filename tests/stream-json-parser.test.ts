@@ -2,7 +2,9 @@ import { describe, it, expect } from "vitest";
 import {
   StreamJsonLineBuffer,
   extractTextFromEvent,
+  extractTextFromCodexEvent,
   extractFromStreamEvents,
+  extractFromCodexStreamEvents,
   type StreamJsonEvent,
 } from "../src/stream-json-parser.js";
 
@@ -49,11 +51,12 @@ describe("StreamJsonLineBuffer", () => {
     expect(events[0].type).toBe("system");
   });
 
-  it("type フィールドがないオブジェクトをスキップする", () => {
+  it("type フィールドがないオブジェクトも受け入れる", () => {
     const buf = new StreamJsonLineBuffer();
     const events = buf.feed('{"data":"no type"}\n{"type":"system"}\n');
-    expect(events).toHaveLength(1);
-    expect(events[0].type).toBe("system");
+    expect(events).toHaveLength(2);
+    expect(events[0].data).toBe("no type");
+    expect(events[1].type).toBe("system");
   });
 
   it("flush で残バッファを処理する", () => {
@@ -188,6 +191,110 @@ describe("extractFromStreamEvents", () => {
     ];
     const result = extractFromStreamEvents(events);
     expect(result.response).toBe("only text");
+    expect(result.sessionId).toBeNull();
+  });
+});
+
+describe("extractTextFromCodexEvent", () => {
+  it("output_text フィールドからテキストを抽出する", () => {
+    const event: StreamJsonEvent = {
+      type: "response",
+      output_text: "Hello from Codex",
+    };
+    expect(extractTextFromCodexEvent(event)).toBe("Hello from Codex");
+  });
+
+  it("output_text が content より優先される", () => {
+    const event: StreamJsonEvent = {
+      type: "message",
+      output_text: "preferred",
+      content: "ignored",
+    };
+    expect(extractTextFromCodexEvent(event)).toBe("preferred");
+  });
+
+  it("type: message + content string からテキストを抽出する", () => {
+    const event: StreamJsonEvent = {
+      type: "message",
+      content: "String content",
+    };
+    expect(extractTextFromCodexEvent(event)).toBe("String content");
+  });
+
+  it("type: message + content 配列からテキストを抽出する", () => {
+    const event: StreamJsonEvent = {
+      type: "message",
+      content: [
+        { type: "text", text: "Part 1" },
+        { type: "text", text: " Part 2" },
+      ],
+    };
+    expect(extractTextFromCodexEvent(event)).toBe("Part 1 Part 2");
+  });
+
+  it("type: message で content 配列に text ブロックがない場合は null", () => {
+    const event: StreamJsonEvent = {
+      type: "message",
+      content: [{ type: "tool_use", id: "123" }],
+    };
+    expect(extractTextFromCodexEvent(event)).toBeNull();
+  });
+
+  it("テキストフィールドがないイベントは null を返す", () => {
+    const event: StreamJsonEvent = { type: "status", status: "complete" };
+    expect(extractTextFromCodexEvent(event)).toBeNull();
+  });
+
+  it("message 以外の type で content があっても無視する", () => {
+    const event: StreamJsonEvent = {
+      type: "other",
+      content: "should be ignored",
+    };
+    expect(extractTextFromCodexEvent(event)).toBeNull();
+  });
+});
+
+describe("extractFromCodexStreamEvents", () => {
+  it("複数イベントのテキストを改行で join する", () => {
+    const events: StreamJsonEvent[] = [
+      { type: "message", content: "Line 1" },
+      { type: "message", content: "Line 2" },
+      { type: "response", output_text: "Line 3" },
+    ];
+    const result = extractFromCodexStreamEvents(events);
+    expect(result.response).toBe("Line 1\nLine 2\nLine 3");
+  });
+
+  it("session_id フィールドを抽出する", () => {
+    const events: StreamJsonEvent[] = [
+      { type: "init", session_id: "sess-123" },
+      { type: "message", content: "Hello" },
+    ];
+    const result = extractFromCodexStreamEvents(events);
+    expect(result.sessionId).toBe("sess-123");
+  });
+
+  it("id フィールドは sessionId として使わない", () => {
+    const events: StreamJsonEvent[] = [
+      { type: "message", id: "msg_abc", content: "Hello" },
+    ];
+    const result = extractFromCodexStreamEvents(events);
+    expect(result.sessionId).toBeNull();
+  });
+
+  it("テキストのないイベントはスキップされる", () => {
+    const events: StreamJsonEvent[] = [
+      { type: "status", status: "working" },
+      { type: "message", content: "Only text" },
+      { type: "done" },
+    ];
+    const result = extractFromCodexStreamEvents(events);
+    expect(result.response).toBe("Only text");
+  });
+
+  it("空イベント列では空 response と null sessionId", () => {
+    const result = extractFromCodexStreamEvents([]);
+    expect(result.response).toBe("");
     expect(result.sessionId).toBeNull();
   });
 });

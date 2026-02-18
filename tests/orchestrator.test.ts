@@ -328,6 +328,8 @@ describe("orchestrator", () => {
     expect(mockCodex.reviewPlan.mock.calls[0][2].onStderr).toEqual(expect.any(Function));
     expect(mockJudgeReview.mock.calls[0][1].onStderr).toEqual(expect.any(Function));
     expect(mockClaudeCode.generatePlan.mock.calls[0][2].streaming).toBe(true);
+    // Codex streaming flag
+    expect(mockCodex.reviewPlan.mock.calls[0][2].streaming).toBe(true);
   });
 
   it("verbose=false かつ debug=false の場合は onStdout/onStderr が undefined", async () => {
@@ -358,6 +360,8 @@ describe("orchestrator", () => {
     expect(mockClaudeCode.generatePlan.mock.calls[0][2].onStderr).toBeUndefined();
     expect(mockCodex.reviewPlan.mock.calls[0][2].onStderr).toBeUndefined();
     expect(mockJudgeReview.mock.calls[0][1].onStderr).toBeUndefined();
+    // Codex streaming flag should be falsy
+    expect(mockCodex.reviewPlan.mock.calls[0][2].streaming).toBeFalsy();
   });
 
   it("debug=true（verbose=false）かつ streaming 対応でも onStdout/onStderr が有効になる", async () => {

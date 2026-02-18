@@ -1,11 +1,18 @@
 import { runCli } from "./cli-runner.js";
 import type { CliRunResult, SessionState } from "./types.js";
 import { extractCodexSessionId, markCodexUsed, buildSummaryContext } from "./session.js";
+import {
+  StreamJsonLineBuffer,
+  extractTextFromCodexEvent,
+  extractFromCodexStreamEvents,
+  type StreamJsonResult,
+} from "./stream-json-parser.js";
 import * as logger from "./logger.js";
 
 export interface CodexOptions {
   cwd: string;
   model?: string;
+  streaming?: boolean;
   onStdout?: (chunk: string) => void;
   onStderr?: (chunk: string) => void;
 }
@@ -85,6 +92,79 @@ export async function checkGitChanges(cwd: string): Promise<boolean> {
 }
 
 /**
+ * Codex CLI をストリーミングモード対応で実行する。
+ * streaming: true → JSONL をインターセプトしてテキスト差分のみ onStdout に送出
+ * streaming: false → 現行動作（raw onStdout パススルー）
+ */
+async function runCodexWithStreaming(
+  args: string[],
+  options: CodexOptions,
+): Promise<{ result: CliRunResult; streamResult?: StreamJsonResult }> {
+  if (!options.streaming) {
+    const result = await runCli("codex", {
+      args,
+      cwd: options.cwd,
+      onStdout: options.onStdout,
+      onStderr: options.onStderr,
+    });
+    return { result };
+  }
+
+  // ストリーミングモード: JSONL をインターセプトしてテキスト差分を送出
+  const lineBuffer = new StreamJsonLineBuffer();
+  const allEvents: import("./stream-json-parser.js").StreamJsonEvent[] = [];
+  let cumulativeText = "";
+  let prevEmittedLength = 0;
+
+  const result = await runCli("codex", {
+    args,
+    cwd: options.cwd,
+    onStdout: (chunk: string) => {
+      const events = lineBuffer.feed(chunk);
+      for (const event of events) {
+        allEvents.push(event);
+        const text = extractTextFromCodexEvent(event);
+        if (text !== null) {
+          if (cumulativeText.length > 0) {
+            cumulativeText += "\n" + text;
+          } else {
+            cumulativeText = text;
+          }
+          const delta = cumulativeText.slice(prevEmittedLength);
+          if (delta) {
+            options.onStdout?.(delta);
+            prevEmittedLength = cumulativeText.length;
+          }
+        }
+      }
+    },
+    onStderr: options.onStderr,
+  });
+
+  // 残バッファ処理
+  const flushed = lineBuffer.flush();
+  for (const event of flushed) {
+    allEvents.push(event);
+    const text = extractTextFromCodexEvent(event);
+    if (text !== null) {
+      if (cumulativeText.length > 0) {
+        cumulativeText += "\n" + text;
+      } else {
+        cumulativeText = text;
+      }
+      const delta = cumulativeText.slice(prevEmittedLength);
+      if (delta) {
+        options.onStdout?.(delta);
+        prevEmittedLength = cumulativeText.length;
+      }
+    }
+  }
+
+  const streamResult = extractFromCodexStreamEvents(allEvents);
+  return { result, streamResult };
+}
+
+/**
  * プランレビュー
  */
 export async function reviewPlan(
@@ -117,16 +197,18 @@ export async function reviewPlan(
 
   args.push(prompt);
 
-  const result = await runCli("codex", {
-    args,
-    cwd: options.cwd,
-    onStdout: options.onStdout,
-    onStderr: options.onStderr,
-  });
+  const { result, streamResult } = await runCodexWithStreaming(args, options);
+
+  // exitCode チェック（失敗時は markCodexUsed を呼ばない）
+  if (result.exitCode !== 0) {
+    throw new Error(
+      `Codex のプランレビューが失敗しました (exit code: ${result.exitCode})\n${result.stderr}`,
+    );
+  }
 
   // 初回時にセッション ID 抽出を試行
   if (session.codexFirstRun) {
-    const extractedId = extractCodexSessionId(result.stdout);
+    const extractedId = streamResult?.sessionId ?? extractCodexSessionId(result.stdout);
     if (extractedId) {
       session.codexSessionId = extractedId;
       logger.debug(`Codex セッション ID 抽出成功: ${extractedId}`);
@@ -137,13 +219,8 @@ export async function reviewPlan(
 
   markCodexUsed(session);
 
-  if (result.exitCode !== 0) {
-    throw new Error(
-      `Codex のプランレビューが失敗しました (exit code: ${result.exitCode})\n${result.stderr}`,
-    );
-  }
-
-  return { response: extractResponse(result.stdout), raw: result };
+  const response = streamResult?.response ?? extractResponse(result.stdout);
+  return { response, raw: result };
 }
 
 /**
@@ -158,12 +235,7 @@ export async function reviewCode(
     args.push("--model", options.model);
   }
 
-  const result = await runCli("codex", {
-    args,
-    cwd: options.cwd,
-    onStdout: options.onStdout,
-    onStderr: options.onStderr,
-  });
+  const { result, streamResult } = await runCodexWithStreaming(args, options);
 
   if (result.exitCode !== 0) {
     throw new Error(
@@ -171,5 +243,6 @@ export async function reviewCode(
     );
   }
 
-  return { response: extractResponse(result.stdout), raw: result };
+  const response = streamResult?.response ?? extractResponse(result.stdout);
+  return { response, raw: result };
 }
