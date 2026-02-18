@@ -181,3 +181,198 @@ describe("セッション管理フロー", () => {
     await expect(generatePlan(session, "test", { cwd: "/tmp" })).rejects.toThrow("不整合");
   });
 });
+
+describe("ストリーミングモード", () => {
+  let runCliMock: ReturnType<typeof vi.fn>;
+
+  beforeEach(async () => {
+    vi.resetAllMocks();
+    const cliRunner = await import("../src/cli-runner.js");
+    runCliMock = cliRunner.runCli as ReturnType<typeof vi.fn>;
+  });
+
+  it("streaming: true で --output-format stream-json, --verbose, --include-partial-messages が渡される", async () => {
+    runCliMock.mockImplementation((_cmd: string, opts: { args: string[]; onStdout?: (chunk: string) => void }) => {
+      // stream-json 形式でイベントを発火
+      const events = [
+        '{"type":"system","session_id":"stream-sess"}\n',
+        '{"type":"result","result":"streamed plan","session_id":"stream-sess"}\n',
+      ];
+      for (const event of events) {
+        opts.onStdout?.(event);
+      }
+      return Promise.resolve({ exitCode: 0, stdout: "", stderr: "" });
+    });
+
+    const { generatePlan } = await import("../src/claude-code.js");
+    const session = { claudeSessionId: null, claudeFirstRun: true, codexSessionId: null, codexFirstRun: true };
+
+    await generatePlan(session, "test", { cwd: "/tmp", streaming: true });
+
+    const calledArgs = runCliMock.mock.calls[0][1].args as string[];
+    expect(calledArgs).toContain("stream-json");
+    expect(calledArgs).not.toContain("json");
+    expect(calledArgs).toContain("--verbose");
+    expect(calledArgs).toContain("--include-partial-messages");
+  });
+
+  it("streaming: false で --output-format json が維持され、--verbose が付かない", async () => {
+    runCliMock.mockResolvedValue({
+      exitCode: 0,
+      stdout: JSON.stringify({ session_id: "sess-1", result: "plan" }),
+      stderr: "",
+    });
+
+    const { generatePlan } = await import("../src/claude-code.js");
+    const session = { claudeSessionId: null, claudeFirstRun: true, codexSessionId: null, codexFirstRun: true };
+
+    await generatePlan(session, "test", { cwd: "/tmp", streaming: false });
+
+    const calledArgs = runCliMock.mock.calls[0][1].args as string[];
+    expect(calledArgs).toContain("json");
+    expect(calledArgs).not.toContain("stream-json");
+    expect(calledArgs).not.toContain("--verbose");
+    expect(calledArgs).not.toContain("--include-partial-messages");
+  });
+
+  it("streaming 未指定で json 経路が使われる", async () => {
+    runCliMock.mockResolvedValue({
+      exitCode: 0,
+      stdout: JSON.stringify({ session_id: "sess-1", result: "plan" }),
+      stderr: "",
+    });
+
+    const { generatePlan } = await import("../src/claude-code.js");
+    const session = { claudeSessionId: null, claudeFirstRun: true, codexSessionId: null, codexFirstRun: true };
+
+    await generatePlan(session, "test", { cwd: "/tmp" });
+
+    const calledArgs = runCliMock.mock.calls[0][1].args as string[];
+    expect(calledArgs).toContain("json");
+    expect(calledArgs).not.toContain("stream-json");
+  });
+
+  it("stream-json 出力から response と sessionId を正しく抽出する", async () => {
+    runCliMock.mockImplementation((_cmd: string, opts: { args: string[]; onStdout?: (chunk: string) => void }) => {
+      const events = [
+        '{"type":"system","session_id":"stream-sess-abc"}\n',
+        '{"type":"assistant","message":{"content":[{"type":"text","text":"partial"}]}}\n',
+        '{"type":"result","result":"final response text","session_id":"stream-sess-abc"}\n',
+      ];
+      for (const event of events) {
+        opts.onStdout?.(event);
+      }
+      return Promise.resolve({ exitCode: 0, stdout: "", stderr: "" });
+    });
+
+    const { generatePlan } = await import("../src/claude-code.js");
+    const session = { claudeSessionId: null, claudeFirstRun: true, codexSessionId: null, codexFirstRun: true };
+
+    const result = await generatePlan(session, "test", { cwd: "/tmp", streaming: true });
+
+    expect(result.response).toBe("final response text");
+    expect(session.claudeSessionId).toBe("stream-sess-abc");
+  });
+
+  it("onStdout が差分テキストのみ受け取る（重複表示防止）", async () => {
+    const receivedChunks: string[] = [];
+
+    runCliMock.mockImplementation((_cmd: string, opts: { args: string[]; onStdout?: (chunk: string) => void }) => {
+      // partial message: "Hello" → "Hello World"
+      const events = [
+        '{"type":"system","session_id":"sess-delta"}\n',
+        '{"type":"assistant","message":{"content":[{"type":"text","text":"Hello"}]}}\n',
+        '{"type":"assistant","message":{"content":[{"type":"text","text":"Hello World"}]}}\n',
+        '{"type":"result","result":"Hello World","session_id":"sess-delta"}\n',
+      ];
+      for (const event of events) {
+        opts.onStdout?.(event);
+      }
+      return Promise.resolve({ exitCode: 0, stdout: "", stderr: "" });
+    });
+
+    const { generatePlan } = await import("../src/claude-code.js");
+    const session = { claudeSessionId: null, claudeFirstRun: true, codexSessionId: null, codexFirstRun: true };
+
+    await generatePlan(session, "test", {
+      cwd: "/tmp",
+      streaming: true,
+      onStdout: (chunk: string) => receivedChunks.push(chunk),
+    });
+
+    // 1回目: "Hello", 2回目: " World" (差分のみ)
+    expect(receivedChunks).toEqual(["Hello", " World"]);
+  });
+
+  it("テキスト長縮退時に prevEmittedLength がリセットされる", async () => {
+    const receivedChunks: string[] = [];
+
+    runCliMock.mockImplementation((_cmd: string, opts: { args: string[]; onStdout?: (chunk: string) => void }) => {
+      const events = [
+        '{"type":"system","session_id":"sess-shrink"}\n',
+        '{"type":"assistant","message":{"content":[{"type":"text","text":"Long text here"}]}}\n',
+        // テキストが短くなるケース（再構成等）
+        '{"type":"assistant","message":{"content":[{"type":"text","text":"Short"}]}}\n',
+        '{"type":"result","result":"Short","session_id":"sess-shrink"}\n',
+      ];
+      for (const event of events) {
+        opts.onStdout?.(event);
+      }
+      return Promise.resolve({ exitCode: 0, stdout: "", stderr: "" });
+    });
+
+    const { generatePlan } = await import("../src/claude-code.js");
+    const session = { claudeSessionId: null, claudeFirstRun: true, codexSessionId: null, codexFirstRun: true };
+
+    await generatePlan(session, "test", {
+      cwd: "/tmp",
+      streaming: true,
+      onStdout: (chunk: string) => receivedChunks.push(chunk),
+    });
+
+    // 1回目: "Long text here", 2回目: "Short"（リセット後に全文再出力）
+    expect(receivedChunks).toEqual(["Long text here", "Short"]);
+  });
+
+  it("末尾改行なしの最終 assistant イベントが onStdout に流れる", async () => {
+    const receivedChunks: string[] = [];
+
+    runCliMock.mockImplementation((_cmd: string, opts: { args: string[]; onStdout?: (chunk: string) => void }) => {
+      // 最後のイベントが改行なしで終了 → feed() では取れず flush() で処理される
+      opts.onStdout?.('{"type":"system","session_id":"sess-noeol"}\n');
+      opts.onStdout?.('{"type":"assistant","message":{"content":[{"type":"text","text":"Hello"}]}}');
+      // ↑ 改行なしのため feed() のバッファに残る
+      return Promise.resolve({ exitCode: 0, stdout: "", stderr: "" });
+    });
+
+    const { generatePlan } = await import("../src/claude-code.js");
+    const session = { claudeSessionId: null, claudeFirstRun: true, codexSessionId: null, codexFirstRun: true };
+
+    const result = await generatePlan(session, "test", {
+      cwd: "/tmp",
+      streaming: true,
+      onStdout: (chunk: string) => receivedChunks.push(chunk),
+    });
+
+    // flush() 経由でも onStdout に差分が転送されること
+    expect(receivedChunks).toEqual(["Hello"]);
+    expect(result.response).toBe("Hello");
+    expect(session.claudeSessionId).toBe("sess-noeol");
+  });
+
+  it("streaming: false で json 経路が正常動作する（クラッシュしない）", async () => {
+    runCliMock.mockResolvedValue({
+      exitCode: 0,
+      stdout: JSON.stringify({ session_id: "sess-json", result: "json result" }),
+      stderr: "",
+    });
+
+    const { generateCode } = await import("../src/claude-code.js");
+    const session = { claudeSessionId: null, claudeFirstRun: true, codexSessionId: null, codexFirstRun: true };
+
+    const result = await generateCode(session, "test", { cwd: "/tmp", streaming: false });
+
+    expect(result.response).toBe("json result");
+    expect(session.claudeSessionId).toBe("sess-json");
+  });
+});

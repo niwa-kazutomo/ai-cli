@@ -2,11 +2,18 @@ import { runCli } from "./cli-runner.js";
 import type { CliRunResult, SessionState } from "./types.js";
 import { markClaudeUsed } from "./session.js";
 import * as logger from "./logger.js";
+import {
+  StreamJsonLineBuffer,
+  extractTextFromEvent,
+  extractFromStreamEvents,
+  type StreamJsonEvent,
+} from "./stream-json-parser.js";
 
 export interface ClaudeCodeOptions {
   cwd: string;
   model?: string;
   dangerous?: boolean;
+  streaming?: boolean;
   onStdout?: (chunk: string) => void;
   onStderr?: (chunk: string) => void;
 }
@@ -76,6 +83,86 @@ export function extractResponse(stdout: string): string {
 }
 
 /**
+ * stream-json / json 形式を切り替えて Claude CLI を実行するヘルパー。
+ * streaming: true 時は stream-json + --verbose + --include-partial-messages を使い、
+ * onStdout に差分テキストのみをリアルタイム転送する。
+ */
+async function runClaudeWithFormat(
+  args: string[],
+  options: ClaudeCodeOptions,
+): Promise<{ result: CliRunResult; streamResult?: { response: string; sessionId: string | null } }> {
+  if (!options.streaming) {
+    // 非ストリーミング: 既存の json パス
+    const result = await runCli("claude", {
+      args,
+      cwd: options.cwd,
+      onStdout: options.onStdout,
+      onStderr: options.onStderr,
+    });
+    return { result };
+  }
+
+  // ストリーミング: stream-json に差し替え
+  const streamArgs = args.map((arg, i) => {
+    // --output-format の次の引数 "json" を "stream-json" に差し替え
+    if (arg === "json" && i > 0 && args[i - 1] === "--output-format") {
+      return "stream-json";
+    }
+    return arg;
+  });
+  streamArgs.push("--verbose", "--include-partial-messages");
+
+  const lineBuffer = new StreamJsonLineBuffer();
+  const allEvents: StreamJsonEvent[] = [];
+  let prevEmittedLength = 0;
+
+  const result = await runCli("claude", {
+    args: streamArgs,
+    cwd: options.cwd,
+    onStdout: (chunk: string) => {
+      const events = lineBuffer.feed(chunk);
+      allEvents.push(...events);
+
+      for (const event of events) {
+        const currentText = extractTextFromEvent(event);
+        if (currentText === null) continue;
+
+        // 縮退ガード: テキスト長が減った場合はリセット
+        if (currentText.length < prevEmittedLength) {
+          prevEmittedLength = 0;
+        }
+
+        const delta = currentText.slice(prevEmittedLength);
+        if (delta.length > 0) {
+          options.onStdout?.(delta);
+          prevEmittedLength = currentText.length;
+        }
+      }
+    },
+    onStderr: options.onStderr,
+  });
+
+  // プロセス終了時に残バッファを処理（差分出力も適用）
+  const remaining = lineBuffer.flush();
+  allEvents.push(...remaining);
+  for (const event of remaining) {
+    const currentText = extractTextFromEvent(event);
+    if (currentText === null) continue;
+    if (currentText.length < prevEmittedLength) {
+      prevEmittedLength = 0;
+    }
+    const delta = currentText.slice(prevEmittedLength);
+    if (delta.length > 0) {
+      options.onStdout?.(delta);
+      prevEmittedLength = currentText.length;
+    }
+  }
+
+  const streamResult = extractFromStreamEvents(allEvents);
+  return { result, streamResult };
+}
+
+/**
  * プラン生成（初回または修正）
  */
 export async function generatePlan(
@@ -98,12 +185,7 @@ export async function generatePlan(
 
   args.push(prompt);
 
-  const result = await runCli("claude", {
-    args,
-    cwd: options.cwd,
-    onStdout: options.onStdout,
-    onStderr: options.onStderr,
-  });
+  const { result, streamResult } = await runClaudeWithFormat(args, options);
 
   if (result.exitCode !== 0) {
     throw new Error(
@@ -113,7 +195,7 @@ export async function generatePlan(
 
   // 初回実行時: レスポンスから session_id を取得
   if (session.claudeFirstRun) {
-    const sessionId = extractSessionId(result.stdout);
+    const sessionId = streamResult?.sessionId ?? extractSessionId(result.stdout);
     if (!sessionId) {
       throw new Error(
         "Claude Code のレスポンスから session_id を取得できませんでした。セッション継続が必要なワークフローのため停止します。",
@@ -124,7 +206,8 @@ export async function generatePlan(
 
   markClaudeUsed(session);
 
-  return { response: extractResponse(result.stdout), raw: result };
+  const response = streamResult?.response ?? extractResponse(result.stdout);
+  return { response, raw: result };
 }
 
 /**
@@ -154,12 +237,7 @@ export async function generateCode(
 
   args.push(prompt);
 
-  const result = await runCli("claude", {
-    args,
-    cwd: options.cwd,
-    onStdout: options.onStdout,
-    onStderr: options.onStderr,
-  });
+  const { result, streamResult } = await runClaudeWithFormat(args, options);
 
   if (result.exitCode !== 0) {
     throw new Error(
@@ -169,7 +247,7 @@ export async function generateCode(
 
   // 初回実行時（通常ありえないが防御的に）: session_id を取得
   if (session.claudeFirstRun) {
-    const sessionId = extractSessionId(result.stdout);
+    const sessionId = streamResult?.sessionId ?? extractSessionId(result.stdout);
     if (!sessionId) {
       throw new Error(
         "Claude Code のレスポンスから session_id を取得できませんでした。セッション継続が必要なワークフローのため停止します。",
@@ -180,5 +258,6 @@ export async function generateCode(
 
   markClaudeUsed(session);
 
-  return { response: extractResponse(result.stdout), raw: result };
+  const response = streamResult?.response ?? extractResponse(result.stdout);
+  return { response, raw: result };
 }

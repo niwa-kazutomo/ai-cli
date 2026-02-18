@@ -3,6 +3,7 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 // Mock all external dependencies
 vi.mock("../src/cli-runner.js", () => ({
   validateCapabilities: vi.fn().mockResolvedValue(null),
+  checkStreamingCapability: vi.fn().mockResolvedValue(false),
   runCli: vi.fn(),
 }));
 
@@ -44,12 +45,14 @@ import * as claudeCode from "../src/claude-code.js";
 import * as codex from "../src/codex.js";
 import { judgeReview } from "../src/review-judge.js";
 import * as ui from "../src/user-interaction.js";
+import { checkStreamingCapability } from "../src/cli-runner.js";
 import type { ReviewJudgment, OrchestratorOptions } from "../src/types.js";
 
 const mockClaudeCode = vi.mocked(claudeCode);
 const mockCodex = vi.mocked(codex);
 const mockJudgeReview = vi.mocked(judgeReview);
 const mockUi = vi.mocked(ui);
+const mockCheckStreamingCapability = vi.mocked(checkStreamingCapability);
 
 const defaultOptions: OrchestratorOptions = {
   prompt: "テストプロンプト",
@@ -293,8 +296,9 @@ describe("orchestrator", () => {
     await expect(runWorkflow(defaultOptions)).rejects.toThrow("Git リポジトリ");
   });
 
-  it("verbose=true の場合は onStdout/onStderr が各 LLM 呼び出しに渡される", async () => {
+  it("verbose=true かつ streaming 対応の場合は onStdout/onStderr が各 LLM 呼び出しに渡される", async () => {
     const opts = { ...defaultOptions, verbose: true };
+    mockCheckStreamingCapability.mockResolvedValue(true);
 
     mockClaudeCode.generatePlan.mockResolvedValue({
       response: "Generated plan",
@@ -323,6 +327,7 @@ describe("orchestrator", () => {
     expect(mockClaudeCode.generatePlan.mock.calls[0][2].onStderr).toEqual(expect.any(Function));
     expect(mockCodex.reviewPlan.mock.calls[0][2].onStderr).toEqual(expect.any(Function));
     expect(mockJudgeReview.mock.calls[0][1].onStderr).toEqual(expect.any(Function));
+    expect(mockClaudeCode.generatePlan.mock.calls[0][2].streaming).toBe(true);
   });
 
   it("verbose=false かつ debug=false の場合は onStdout/onStderr が undefined", async () => {
@@ -355,8 +360,9 @@ describe("orchestrator", () => {
     expect(mockJudgeReview.mock.calls[0][1].onStderr).toBeUndefined();
   });
 
-  it("debug=true（verbose=false）でも onStdout/onStderr が有効になる", async () => {
+  it("debug=true（verbose=false）かつ streaming 対応でも onStdout/onStderr が有効になる", async () => {
     const opts = { ...defaultOptions, verbose: false, debug: true };
+    mockCheckStreamingCapability.mockResolvedValue(true);
 
     mockClaudeCode.generatePlan.mockResolvedValue({
       response: "Generated plan",
@@ -383,6 +389,7 @@ describe("orchestrator", () => {
     expect(mockJudgeReview.mock.calls[0][1].onStdout).toEqual(expect.any(Function));
     expect(mockClaudeCode.generatePlan.mock.calls[0][2].onStderr).toEqual(expect.any(Function));
     expect(mockJudgeReview.mock.calls[0][1].onStderr).toEqual(expect.any(Function));
+    expect(mockClaudeCode.generatePlan.mock.calls[0][2].streaming).toBe(true);
   });
 
   it("通常モードでは startProgress が呼ばれ、成功時に stop(true) が呼ばれる", async () => {
@@ -430,5 +437,141 @@ describe("orchestrator", () => {
     await expect(runWorkflow(defaultOptions)).rejects.toThrow("boom");
 
     expect(stop).toHaveBeenCalledWith(false);
+  });
+
+  it("checkStreamingCapability が false を返す場合、claudeOpts.streaming が false になる", async () => {
+    const opts = { ...defaultOptions, verbose: true };
+    mockCheckStreamingCapability.mockResolvedValue(false);
+
+    mockClaudeCode.generatePlan.mockResolvedValue({
+      response: "Generated plan",
+      raw: { exitCode: 0, stdout: "", stderr: "" },
+    });
+    mockCodex.reviewPlan.mockResolvedValue({
+      response: "Looks good",
+      raw: { exitCode: 0, stdout: "", stderr: "" },
+    });
+    mockJudgeReview.mockResolvedValue(makeJudgment(false));
+    mockUi.confirmYesNo.mockResolvedValue(true);
+    mockClaudeCode.generateCode.mockResolvedValue({
+      response: "Generated code",
+      raw: { exitCode: 0, stdout: "", stderr: "" },
+    });
+    mockCodex.reviewCode.mockResolvedValue({
+      response: "Code looks good",
+      raw: { exitCode: 0, stdout: "", stderr: "" },
+    });
+
+    await runWorkflow(opts);
+
+    expect(mockClaudeCode.generatePlan.mock.calls[0][2].streaming).toBe(false);
+  });
+
+  it("フォールバック時（streaming 非対応）に Claude 向け onStdout が undefined になる", async () => {
+    const opts = { ...defaultOptions, verbose: true };
+    mockCheckStreamingCapability.mockResolvedValue(false);
+
+    mockClaudeCode.generatePlan.mockResolvedValue({
+      response: "Generated plan",
+      raw: { exitCode: 0, stdout: "", stderr: "" },
+    });
+    mockCodex.reviewPlan.mockResolvedValue({
+      response: "Looks good",
+      raw: { exitCode: 0, stdout: "", stderr: "" },
+    });
+    mockJudgeReview.mockResolvedValue(makeJudgment(false));
+    mockUi.confirmYesNo.mockResolvedValue(true);
+    mockClaudeCode.generateCode.mockResolvedValue({
+      response: "Generated code",
+      raw: { exitCode: 0, stdout: "", stderr: "" },
+    });
+    mockCodex.reviewCode.mockResolvedValue({
+      response: "Code looks good",
+      raw: { exitCode: 0, stdout: "", stderr: "" },
+    });
+
+    await runWorkflow(opts);
+
+    // Claude 向け onStdout は undefined（JSON blob がそのまま表示されるのを防ぐ）
+    expect(mockClaudeCode.generatePlan.mock.calls[0][2].onStdout).toBeUndefined();
+    // stderr は常に有効
+    expect(mockClaudeCode.generatePlan.mock.calls[0][2].onStderr).toEqual(expect.any(Function));
+    // Codex やレビュー向け onStdout は引き続き有効
+    expect(mockCodex.reviewPlan.mock.calls[0][2].onStdout).toEqual(expect.any(Function));
+    expect(mockJudgeReview.mock.calls[0][1].onStdout).toEqual(expect.any(Function));
+  });
+
+  it("stream 非対応環境で全ワークフローが正常完了する（フォールバック経路）", async () => {
+    const opts = { ...defaultOptions, verbose: true };
+    mockCheckStreamingCapability.mockResolvedValue(false);
+
+    mockClaudeCode.generatePlan.mockResolvedValue({
+      response: "Generated plan",
+      raw: { exitCode: 0, stdout: "", stderr: "" },
+    });
+    mockCodex.reviewPlan.mockResolvedValue({
+      response: "Looks good",
+      raw: { exitCode: 0, stdout: "", stderr: "" },
+    });
+    mockJudgeReview.mockResolvedValue(makeJudgment(false));
+    mockUi.confirmYesNo.mockResolvedValue(true);
+    mockClaudeCode.generateCode.mockResolvedValue({
+      response: "Generated code",
+      raw: { exitCode: 0, stdout: "", stderr: "" },
+    });
+    mockCodex.reviewCode.mockResolvedValue({
+      response: "Code looks good",
+      raw: { exitCode: 0, stdout: "", stderr: "" },
+    });
+
+    await runWorkflow(opts);
+
+    // ワークフロー全体が正常完了
+    expect(mockClaudeCode.generatePlan).toHaveBeenCalledTimes(1);
+    expect(mockClaudeCode.generateCode).toHaveBeenCalledTimes(1);
+    expect(mockCodex.reviewPlan).toHaveBeenCalledTimes(1);
+    expect(mockCodex.reviewCode).toHaveBeenCalledTimes(1);
+  });
+
+  it("verbose=true かつ streaming 非対応の場合、Claude 呼び出しでスピナーが表示される", async () => {
+    const opts = { ...defaultOptions, verbose: true };
+    mockCheckStreamingCapability.mockResolvedValue(false);
+
+    const stopFns: Array<ReturnType<typeof vi.fn>> = [];
+    mockUi.startProgress.mockImplementation(() => {
+      const stop = vi.fn();
+      stopFns.push(stop);
+      return { stop };
+    });
+
+    mockClaudeCode.generatePlan.mockResolvedValue({
+      response: "Generated plan",
+      raw: { exitCode: 0, stdout: "", stderr: "" },
+    });
+    mockCodex.reviewPlan.mockResolvedValue({
+      response: "Looks good",
+      raw: { exitCode: 0, stdout: "", stderr: "" },
+    });
+    mockJudgeReview.mockResolvedValue(makeJudgment(false));
+    mockUi.confirmYesNo.mockResolvedValue(true);
+    mockClaudeCode.generateCode.mockResolvedValue({
+      response: "Generated code",
+      raw: { exitCode: 0, stdout: "", stderr: "" },
+    });
+    mockCodex.reviewCode.mockResolvedValue({
+      response: "Code looks good",
+      raw: { exitCode: 0, stdout: "", stderr: "" },
+    });
+
+    await runWorkflow(opts);
+
+    // Claude 呼び出し（プラン生成・コード生成）でスピナーが表示される
+    // canStream=false なので runWithProgress にスピナーが要求される
+    expect(mockUi.startProgress).toHaveBeenCalled();
+    // スピナーの stop(true) が呼ばれていること
+    expect(stopFns.length).toBeGreaterThan(0);
+    stopFns.forEach((stop) => {
+      expect(stop).toHaveBeenCalledWith(true);
+    });
   });
 });

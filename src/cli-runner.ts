@@ -179,3 +179,17 @@ export async function validateCapabilities(
 
   return null;
 }
+
+/**
+ * Claude CLI が stream-json ストリーミングに対応しているかチェックする。
+ * 非対応の場合は false を返す（呼び出し側で json にフォールバック）。
+ */
+export async function checkStreamingCapability(cwd?: string): Promise<boolean> {
+  const result = await checkCapabilities(
+    "claude",
+    ["--help"],
+    ["stream-json", "--include-partial-messages"],
+    cwd,
+  );
+  return result.supported;
+}

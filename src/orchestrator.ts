@@ -4,7 +4,7 @@ import * as codex from "./codex.js";
 import { judgeReview } from "./review-judge.js";
 import * as ui from "./user-interaction.js";
 import { PROMPTS, MESSAGES } from "./constants.js";
-import { validateCapabilities } from "./cli-runner.js";
+import { validateCapabilities, checkStreamingCapability } from "./cli-runner.js";
 import type { OrchestratorOptions, ReviewJudgment, SessionState } from "./types.js";
 import * as logger from "./logger.js";
 
@@ -56,12 +56,23 @@ export async function runWorkflow(options: OrchestratorOptions): Promise<void> {
   }
   ui.display("✅ CLI の互換性チェックに成功しました");
 
+  // ストリーミング capability チェック
+  let streamingAvailable = false;
+  if (shouldStream) {
+    streamingAvailable = await checkStreamingCapability(cwd);
+    if (!streamingAvailable) {
+      logger.warn("Claude CLI が stream-json に非対応のため、ストリーミングは無効になります。");
+    }
+  }
+  const canStream = shouldStream && streamingAvailable;
+
   const session = createSession();
   const claudeOpts = {
     cwd,
     model: options.claudeModel,
     dangerous,
-    onStdout: stdoutCallback,
+    streaming: canStream,
+    onStdout: canStream ? stdoutCallback : undefined,
     onStderr: stderrCallback,
   };
   const codexOpts = {
@@ -77,7 +88,7 @@ export async function runWorkflow(options: OrchestratorOptions): Promise<void> {
   logger.verbose("プロンプト", prompt);
 
   const planPrompt = PROMPTS.PLAN_GENERATION(prompt);
-  let planResult = await runWithProgress(shouldStream, "プラン生成中...", () =>
+  let planResult = await runWithProgress(canStream, "プラン生成中...", () =>
     claudeCode.generatePlan(session, planPrompt, claudeOpts),
   );
   let currentPlan = planResult.response;
@@ -163,7 +174,7 @@ export async function runWorkflow(options: OrchestratorOptions): Promise<void> {
       formatConcerns(judgment),
       userAnswers || undefined,
     );
-    planResult = await runWithProgress(shouldStream, "プラン修正中...", () =>
+    planResult = await runWithProgress(canStream, "プラン修正中...", () =>
       claudeCode.generatePlan(session, revisionPrompt, claudeOpts),
     );
     currentPlan = planResult.response;
@@ -217,7 +228,7 @@ export async function runWorkflow(options: OrchestratorOptions): Promise<void> {
   ui.display("💻 Step 4: コード生成を開始します...");
 
   const codePrompt = PROMPTS.CODE_GENERATION();
-  const codeResult = await runWithProgress(shouldStream, "コード生成中...", () =>
+  const codeResult = await runWithProgress(canStream, "コード生成中...", () =>
     claudeCode.generateCode(session, codePrompt, claudeOpts),
   );
   logger.verbose("コード生成結果", codeResult.response);
@@ -279,7 +290,7 @@ export async function runWorkflow(options: OrchestratorOptions): Promise<void> {
     ui.displaySeparator();
     ui.display("🔄 Step 6: コードを修正中...");
     const codeRevisionPrompt = PROMPTS.CODE_REVISION(formatConcerns(codeJudgment));
-    await runWithProgress(shouldStream, "コード修正中...", () =>
+    await runWithProgress(canStream, "コード修正中...", () =>
       claudeCode.generateCode(session, codeRevisionPrompt, claudeOpts),
     );
     logger.verbose("コード修正完了");
