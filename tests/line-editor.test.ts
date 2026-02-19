@@ -345,6 +345,15 @@ describe("readLine", () => {
     expect(result).toEqual({ type: "input", value: "" });
   });
 
+  it("accepts input even when stream was explicitly paused (simulates readline.close())", async () => {
+    // readline.createInterface().close() が内部で input.pause() を呼ぶ状況を再現
+    input.pause();
+    const promise = readLine(makeOptions(input, output));
+    input.write("after-pause\r");
+    const result = await promise;
+    expect(result).toEqual({ type: "input", value: "after-pause" });
+  });
+
   it("arrow left and right navigation", async () => {
     const promise = readLine(makeOptions(input, output));
     // Type "ab", left, left, type "X", right, type "Y", Enter

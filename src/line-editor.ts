@@ -528,6 +528,8 @@ export function readLine(options: LineEditorOptions): Promise<LineEditorResult> 
     }
 
     input.on("data", onData);
+    // readline.close() may leave stdin explicitly paused; resume() is safe/idempotent.
+    input.resume();
 
     // Initial render (show prompt)
     try {
