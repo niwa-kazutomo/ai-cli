@@ -1,5 +1,5 @@
 import { runCli } from "./cli-runner.js";
-import type { CliRunResult, SessionState } from "./types.js";
+import type { CliRunResult, SessionState, CodexSandboxMode } from "./types.js";
 import { extractCodexSessionId, markCodexUsed, buildSummaryContext } from "./session.js";
 import {
   StreamJsonLineBuffer,
@@ -12,6 +12,7 @@ import * as logger from "./logger.js";
 export interface CodexOptions {
   cwd: string;
   model?: string;
+  sandbox?: CodexSandboxMode;
   streaming?: boolean;
   onStdout?: (chunk: string) => void;
   onStderr?: (chunk: string) => void;
@@ -286,7 +287,8 @@ export async function reviewCode(
   prompt: string,
   options: CodexOptions,
 ): Promise<{ response: string; raw: CliRunResult }> {
-  const args = ["exec", "--sandbox", "read-only", "--json"];
+  const sandboxMode = options.sandbox ?? "workspace-write";
+  const args = ["exec", "--sandbox", sandboxMode, "--json"];
 
   if (options.model) {
     args.push("--model", options.model);

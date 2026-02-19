@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { extractResponse, checkGitRepo, checkGitChanges, getGitDiff, reviewPlan, reviewCode } from "../src/codex.js";
-import type { SessionState } from "../src/types.js";
+import type { SessionState, CodexSandboxMode } from "../src/types.js";
 
 describe("extractResponse", () => {
   it("item.completed の agent_message からテキストを抽出する", () => {
@@ -244,6 +244,32 @@ describe("reviewPlan streaming", () => {
     expect(chunks.join("")).toBe("With ID");
   });
 
+  it("reviewPlan は options.sandbox を指定しても read-only を使う", async () => {
+    const session: SessionState = {
+      claudeSessionId: null,
+      claudeFirstRun: true,
+      codexSessionId: null,
+      codexFirstRun: true,
+    };
+
+    mockRunCli.mockImplementation(async (_cmd, opts) => {
+      const line = JSON.stringify({ type: "item.completed", item: { id: "item_1", type: "agent_message", text: "ok" } }) + "\n";
+      opts.onStdout?.(line);
+      return { exitCode: 0, stdout: line, stderr: "" };
+    });
+
+    await reviewPlan(session, "test prompt", {
+      cwd: "/tmp",
+      sandbox: "workspace-write",
+      streaming: true,
+      onStdout: () => {},
+    });
+
+    const callArgs = mockRunCli.mock.calls[0][1].args;
+    expect(callArgs).toContain("read-only");
+    expect(callArgs).not.toContain("workspace-write");
+  });
+
   it("streaming=true で複数 item の交互更新が正しい順序で出力される", async () => {
     const chunks: string[] = [];
     const session: SessionState = {
@@ -300,7 +326,7 @@ describe("reviewCode streaming", () => {
     expect(chunks.join("")).toBe("Review done");
   });
 
-  it("codex exec --sandbox read-only --json とプロンプトが引数に渡される", async () => {
+  it("デフォルトで --sandbox workspace-write が使用される", async () => {
     mockRunCli.mockImplementation(async (_cmd, opts) => {
       const line = JSON.stringify({ type: "item.completed", item: { id: "item_1", type: "agent_message", text: "ok" } }) + "\n";
       opts.onStdout?.(line);
@@ -315,11 +341,48 @@ describe("reviewCode streaming", () => {
 
     const callArgs = mockRunCli.mock.calls[0][1].args;
     expect(callArgs).toContain("--sandbox");
-    expect(callArgs).toContain("read-only");
+    expect(callArgs).toContain("workspace-write");
     expect(callArgs).toContain("--json");
     expect(callArgs).toContain("my review prompt");
-    expect(callArgs).not.toContain("review");
-    expect(callArgs).not.toContain("--uncommitted");
+    expect(callArgs).not.toContain("read-only");
+  });
+
+  it("sandbox オプションで read-only に上書きできる", async () => {
+    mockRunCli.mockImplementation(async (_cmd, opts) => {
+      const line = JSON.stringify({ type: "item.completed", item: { id: "item_1", type: "agent_message", text: "ok" } }) + "\n";
+      opts.onStdout?.(line);
+      return { exitCode: 0, stdout: line, stderr: "" };
+    });
+
+    await reviewCode("prompt", {
+      cwd: "/tmp",
+      sandbox: "read-only",
+      streaming: true,
+      onStdout: () => {},
+    });
+
+    const callArgs = mockRunCli.mock.calls[0][1].args;
+    expect(callArgs).toContain("read-only");
+    expect(callArgs).not.toContain("workspace-write");
+  });
+
+  it("sandbox オプションで danger-full-access に上書きできる", async () => {
+    mockRunCli.mockImplementation(async (_cmd, opts) => {
+      const line = JSON.stringify({ type: "item.completed", item: { id: "item_1", type: "agent_message", text: "ok" } }) + "\n";
+      opts.onStdout?.(line);
+      return { exitCode: 0, stdout: line, stderr: "" };
+    });
+
+    await reviewCode("prompt", {
+      cwd: "/tmp",
+      sandbox: "danger-full-access",
+      streaming: true,
+      onStdout: () => {},
+    });
+
+    const callArgs = mockRunCli.mock.calls[0][1].args;
+    expect(callArgs).toContain("danger-full-access");
+    expect(callArgs).not.toContain("workspace-write");
   });
 });
 

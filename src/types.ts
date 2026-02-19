@@ -31,6 +31,9 @@ export interface CliRunOptions {
   env?: Record<string, string | undefined>;
 }
 
+export const CODEX_SANDBOX_MODES = ["read-only", "workspace-write", "danger-full-access"] as const;
+export type CodexSandboxMode = typeof CODEX_SANDBOX_MODES[number];
+
 export interface CapabilityCheckResult {
   supported: boolean;
   missingFlags: string[];
@@ -49,6 +52,7 @@ export interface OrchestratorOptions {
   maxCodeIterations: number;
   claudeModel?: string;
   codexModel?: string;
+  codexSandbox?: CodexSandboxMode;
   dangerous: boolean;
   verbose: boolean;
   debug: boolean;

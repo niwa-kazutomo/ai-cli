@@ -30,7 +30,7 @@ import {
   DEFAULT_MAX_PLAN_ITERATIONS,
   DEFAULT_MAX_CODE_ITERATIONS,
 } from "../src/constants.js";
-import type { ReplOptions } from "../src/types.js";
+import type { ReplOptions, CodexSandboxMode } from "../src/types.js";
 
 const mockRunWorkflow = vi.mocked(runWorkflow);
 const mockStartRepl = vi.mocked(startRepl);
@@ -143,6 +143,59 @@ describe("createProgram CLI routing", () => {
 
     expect(exitSpy).toHaveBeenCalledWith(1);
     exitSpy.mockRestore();
+  });
+
+  it("--codex-sandbox workspace-write が正しくパースされる", async () => {
+    mockRunWorkflow.mockResolvedValue(undefined);
+    const program = createProgram();
+    await program.parseAsync(["plan", "--codex-sandbox", "workspace-write", "テスト"], { from: "user" });
+
+    expect(mockRunWorkflow).toHaveBeenCalledWith(
+      expect.objectContaining({ codexSandbox: "workspace-write" }),
+    );
+  });
+
+  it("--codex-sandbox read-only が正しくパースされる", async () => {
+    mockRunWorkflow.mockResolvedValue(undefined);
+    const program = createProgram();
+    await program.parseAsync(["plan", "--codex-sandbox", "read-only", "テスト"], { from: "user" });
+
+    expect(mockRunWorkflow).toHaveBeenCalledWith(
+      expect.objectContaining({ codexSandbox: "read-only" }),
+    );
+  });
+
+  it("--codex-sandbox 不正値で process.exit(1) が呼ばれる", async () => {
+    const exitSpy = vi.spyOn(process, "exit").mockImplementation((() => {
+      throw new Error("process.exit called");
+    }) as never);
+
+    const stderrSpy = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+
+    const program = createProgram();
+    await expect(
+      program.parseAsync(["plan", "--codex-sandbox", "typo", "テスト"], { from: "user" }),
+    ).rejects.toThrow("process.exit");
+
+    expect(exitSpy).toHaveBeenCalledWith(1);
+    expect(stderrSpy).toHaveBeenCalledWith(
+      expect.stringContaining("無効な --codex-sandbox 値"),
+    );
+
+    exitSpy.mockRestore();
+    stderrSpy.mockRestore();
+  });
+
+  it("prompt なしで --codex-sandbox 指定時に startRepl へ codexSandbox が渡る", async () => {
+    const program = createProgram();
+    await program.parseAsync(["--codex-sandbox", "read-only"], { from: "user" });
+
+    expect(mockStartRepl).toHaveBeenCalledTimes(1);
+    expect(mockStartRepl).toHaveBeenCalledWith(
+      expect.objectContaining({ codexSandbox: "read-only" }),
+      expect.any(String),
+      expect.any(String),
+    );
   });
 
   it("シングルショットでオプション指定あり → display が呼ばれる", async () => {
@@ -260,6 +313,22 @@ describe("formatActiveOptions", () => {
     const result = formatActiveOptions({
       ...baseOptions,
       maxCodeIterations: DEFAULT_MAX_CODE_ITERATIONS,
+    });
+    expect(result).toBeNull();
+  });
+
+  it("--codex-sandbox 指定 → 表示される", () => {
+    const result = formatActiveOptions({
+      ...baseOptions,
+      codexSandbox: "read-only",
+    });
+    expect(result).toBe("⚙ オプション: --codex-sandbox read-only");
+  });
+
+  it("--codex-sandbox 未指定 → null を返す", () => {
+    const result = formatActiveOptions({
+      ...baseOptions,
+      codexSandbox: undefined,
     });
     expect(result).toBeNull();
   });

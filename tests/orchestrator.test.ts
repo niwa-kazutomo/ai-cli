@@ -1359,6 +1359,36 @@ describe("orchestrator", () => {
     expect(codeReviewPrompt).toContain(retryFull);
   });
 
+  it("codexSandbox オプションが codex.reviewCode に伝播される", async () => {
+    const opts = { ...defaultOptions, codexSandbox: "read-only" as const };
+
+    mockClaudeCode.generatePlan.mockResolvedValue({
+      response: "Plan",
+      raw: { exitCode: 0, stdout: "", stderr: "" },
+    });
+    mockCodex.reviewPlan.mockResolvedValue({
+      response: "OK",
+      raw: { exitCode: 0, stdout: "", stderr: "" },
+    });
+    mockJudgeReview.mockResolvedValue(makeJudgment(false));
+    mockUi.promptPlanApproval.mockResolvedValue({ action: "approve" });
+    mockClaudeCode.generateCode.mockResolvedValue({
+      response: "Code",
+      raw: { exitCode: 0, stdout: "", stderr: "" },
+    });
+    mockCodex.reviewCode.mockResolvedValue({
+      response: "LGTM",
+      raw: { exitCode: 0, stdout: "", stderr: "" },
+    });
+
+    await runWorkflow(opts);
+
+    // reviewCode の第2引数に sandbox が含まれること
+    expect(mockCodex.reviewCode.mock.calls[0][1]).toMatchObject({ sandbox: "read-only" });
+    // reviewPlan にも sandbox が渡されること（reviewPlan 側で無視する）
+    expect(mockCodex.reviewPlan.mock.calls[0][2]).toMatchObject({ sandbox: "read-only" });
+  });
+
   it("プラン本文中に「変更点」を含むが先頭行でなければ全文と判定される", async () => {
     const initialPlan = "A".repeat(100);
     // 先頭行はパターン不一致、本文中に「変更点」あり

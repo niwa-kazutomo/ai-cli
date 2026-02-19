@@ -8,7 +8,8 @@ import {
   DEFAULT_MAX_PLAN_ITERATIONS,
   DEFAULT_MAX_CODE_ITERATIONS,
 } from "./constants.js";
-import type { ReplOptions } from "./types.js";
+import { CODEX_SANDBOX_MODES } from "./types.js";
+import type { ReplOptions, CodexSandboxMode } from "./types.js";
 
 const VERSION = "0.1.0";
 
@@ -18,6 +19,7 @@ function buildWorkflowOptions(opts: Record<string, unknown>): ReplOptions {
     maxCodeIterations: parseInt(String(opts.maxCodeIterations), 10),
     claudeModel: opts.claudeModel as string | undefined,
     codexModel: opts.codexModel as string | undefined,
+    codexSandbox: opts.codexSandbox as CodexSandboxMode | undefined,
     dangerous: Boolean(opts.dangerous),
     verbose: Boolean(opts.verbose),
     debug: Boolean(opts.debug),
@@ -42,6 +44,8 @@ export function formatActiveOptions(options: ReplOptions): string | null {
     parts.push(`--claude-model ${JSON.stringify(options.claudeModel)}`);
   if (options.codexModel !== undefined)
     parts.push(`--codex-model ${JSON.stringify(options.codexModel)}`);
+  if (options.codexSandbox !== undefined)
+    parts.push(`--codex-sandbox ${options.codexSandbox}`);
   if (options.maxPlanIterations !== DEFAULT_MAX_PLAN_ITERATIONS)
     parts.push(`--max-plan-iterations ${String(options.maxPlanIterations)}`);
   if (options.maxCodeIterations !== DEFAULT_MAX_CODE_ITERATIONS)
@@ -83,6 +87,7 @@ export function createProgram(): Command {
     )
     .option("--claude-model <model>", "Claude Code のモデル指定")
     .option("--codex-model <model>", "Codex のモデル指定")
+    .option("--codex-sandbox <mode>", "Codex コードレビュー時の sandbox モード (read-only, workspace-write, danger-full-access)")
     .option(
       "--dangerous",
       "コード生成時に --dangerously-skip-permissions を使用",
@@ -91,6 +96,15 @@ export function createProgram(): Command {
     .option("--debug", "全文ログ出力（開発用）")
     .option("--cwd <dir>", "作業ディレクトリ指定", process.cwd())
     .action(async (prompt: string | undefined, opts) => {
+      if (
+        opts.codexSandbox !== undefined &&
+        !(CODEX_SANDBOX_MODES as readonly string[]).includes(opts.codexSandbox as string)
+      ) {
+        process.stderr.write(
+          `❌ 無効な --codex-sandbox 値: ${JSON.stringify(opts.codexSandbox)}\n有効な値: ${CODEX_SANDBOX_MODES.join(", ")}\n`,
+        );
+        process.exit(1);
+      }
       setupLogger(opts);
       const workflowOptions = buildWorkflowOptions(opts);
       const activeOptionsLine = formatActiveOptions(workflowOptions);

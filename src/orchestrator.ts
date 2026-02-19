@@ -154,6 +154,7 @@ export async function runWorkflow(options: OrchestratorOptions): Promise<void> {
   const codexOpts = {
     cwd,
     model: options.codexModel,
+    sandbox: options.codexSandbox,
     streaming: shouldStream,
     onStdout: stdoutCallback,
     onStderr: stderrCallback,
