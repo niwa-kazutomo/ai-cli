@@ -677,14 +677,55 @@ describe("orchestrator", () => {
 
     await runWorkflow(opts);
 
-    // Claude 呼び出し（プラン生成・コード生成）でスピナーが表示される
-    // canStream=false なので runWithProgress にスピナーが要求される
-    expect(mockUi.startProgress).toHaveBeenCalled();
+    // Claude 呼び出し（プラン生成・コード生成）でのみスピナーが表示される
+    // canStream=false だが shouldStream=true なので、レビュー系はスピナーなし
+    expect(mockUi.startProgress).toHaveBeenCalledTimes(2);
     // スピナーの stop(true) が呼ばれていること
-    expect(stopFns.length).toBeGreaterThan(0);
+    expect(stopFns.length).toBe(2);
     stopFns.forEach((stop) => {
       expect(stop).toHaveBeenCalledWith(true);
     });
+  });
+
+  it("verbose=true の場合、レビュー系ステップでスピナーが表示されない", async () => {
+    const opts = { ...defaultOptions, verbose: true };
+    mockCheckStreamingCapability.mockResolvedValue(true);
+
+    mockUi.startProgress.mockImplementation(() => {
+      const stop = vi.fn();
+      return { stop };
+    });
+
+    mockClaudeCode.generatePlan.mockResolvedValue({
+      response: "Generated plan",
+      raw: { exitCode: 0, stdout: "", stderr: "" },
+    });
+    mockCodex.reviewPlan.mockResolvedValue({
+      response: "Looks good",
+      raw: { exitCode: 0, stdout: "", stderr: "" },
+    });
+    mockJudgeReview.mockResolvedValue(makeJudgment(false));
+    mockUi.promptPlanApproval.mockResolvedValue({ action: "approve" });
+    mockClaudeCode.generateCode.mockResolvedValue({
+      response: "Generated code",
+      raw: { exitCode: 0, stdout: "", stderr: "" },
+    });
+    mockCodex.reviewCode.mockResolvedValue({
+      response: "Code looks good",
+      raw: { exitCode: 0, stdout: "", stderr: "" },
+    });
+
+    await runWorkflow(opts);
+
+    // shouldStream=true かつ canStream=true なので全ステップでスピナーなし
+    expect(mockUi.startProgress).not.toHaveBeenCalled();
+
+    // startProgress が呼ばれていたとしても、レビュー系ラベルが含まれないことを確認
+    const progressLabels = mockUi.startProgress.mock.calls.map((call) => call[0]);
+    expect(progressLabels).not.toContain("プランレビュー中...");
+    expect(progressLabels).not.toContain("レビュー判定中...");
+    expect(progressLabels).not.toContain("コードレビュー中...");
+    expect(progressLabels).not.toContain("コードレビュー判定中...");
   });
 
   it("ユーザー修正指示 → 再レビュー → 承認でワークフローが完了する", async () => {
