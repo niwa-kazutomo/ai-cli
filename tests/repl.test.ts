@@ -14,6 +14,15 @@ vi.mock("../src/logger.js", () => ({
   configureLogger: vi.fn(),
 }));
 
+const mockReadFileSync = vi.fn();
+const mockWriteFileSync = vi.fn();
+const mockChmodSync = vi.fn();
+vi.mock("node:fs", () => ({
+  readFileSync: (...args: unknown[]) => mockReadFileSync(...args),
+  writeFileSync: (...args: unknown[]) => mockWriteFileSync(...args),
+  chmodSync: (...args: unknown[]) => mockChmodSync(...args),
+}));
+
 // node:readline をモックして promptOnce の挙動を制御する
 let questionCallbacks: Array<(answer: string) => void> = [];
 let closeListeners: Array<() => void> = [];
@@ -24,9 +33,11 @@ let mockRlInstance: {
   on: ReturnType<typeof vi.fn>;
   removeListener: ReturnType<typeof vi.fn>;
 };
+let lastCreateInterfaceOptions: Record<string, unknown> = {};
 
 vi.mock("node:readline", () => ({
-  createInterface: vi.fn(() => {
+  createInterface: vi.fn((opts: Record<string, unknown>) => {
+    lastCreateInterfaceOptions = opts;
     mockRlInstance = {
       question: vi.fn((_prompt: string, cb: (answer: string) => void) => {
         questionCallbacks.push(cb);
@@ -107,16 +118,23 @@ async function simulateSigint(): Promise<void> {
 }
 
 describe("startRepl", () => {
+  const DUMMY_HISTORY_FILE = "/tmp/test_ai_cli_history";
+
   beforeEach(() => {
     vi.clearAllMocks();
     questionCallbacks = [];
     closeListeners = [];
     sigintListeners = [];
+    lastCreateInterfaceOptions = {};
     mockRunWorkflow.mockResolvedValue(undefined);
+    // デフォルト: ヒストリーファイルなし
+    mockReadFileSync.mockImplementation(() => { throw new Error("ENOENT"); });
+    mockWriteFileSync.mockImplementation(() => {});
+    mockChmodSync.mockImplementation(() => {});
   });
 
   it("1回の入力後 exit で runWorkflow が1回呼ばれる", async () => {
-    const replPromise = startRepl(defaultReplOptions, "0.1.0");
+    const replPromise = startRepl(defaultReplOptions, "0.1.0", undefined, DUMMY_HISTORY_FILE);
 
     await answerPrompt("テストプロンプト");
     await answerPrompt("exit");
@@ -130,7 +148,7 @@ describe("startRepl", () => {
   });
 
   it("quit で終了する", async () => {
-    const replPromise = startRepl(defaultReplOptions, "0.1.0");
+    const replPromise = startRepl(defaultReplOptions, "0.1.0", undefined, DUMMY_HISTORY_FILE);
 
     await answerPrompt("quit");
 
@@ -140,7 +158,7 @@ describe("startRepl", () => {
   });
 
   it("空入力は runWorkflow を呼ばない", async () => {
-    const replPromise = startRepl(defaultReplOptions, "0.1.0");
+    const replPromise = startRepl(defaultReplOptions, "0.1.0", undefined, DUMMY_HISTORY_FILE);
 
     await answerPrompt("");
     await answerPrompt("   "); // 空白のみ
@@ -152,7 +170,7 @@ describe("startRepl", () => {
   });
 
   it("複数プロンプトで runWorkflow が複数回呼ばれる", async () => {
-    const replPromise = startRepl(defaultReplOptions, "0.1.0");
+    const replPromise = startRepl(defaultReplOptions, "0.1.0", undefined, DUMMY_HISTORY_FILE);
 
     await answerPrompt("最初のプロンプト");
     await answerPrompt("2番目のプロンプト");
@@ -176,7 +194,7 @@ describe("startRepl", () => {
       .mockRejectedValueOnce(new Error("テストエラー"))
       .mockResolvedValueOnce(undefined);
 
-    const replPromise = startRepl(defaultReplOptions, "0.1.0");
+    const replPromise = startRepl(defaultReplOptions, "0.1.0", undefined, DUMMY_HISTORY_FILE);
 
     await answerPrompt("エラーになるプロンプト");
     await answerPrompt("正常なプロンプト");
@@ -188,7 +206,7 @@ describe("startRepl", () => {
   });
 
   it("EOF (Ctrl+D) で正常終了する", async () => {
-    const replPromise = startRepl(defaultReplOptions, "0.1.0");
+    const replPromise = startRepl(defaultReplOptions, "0.1.0", undefined, DUMMY_HISTORY_FILE);
 
     await simulateEof();
 
@@ -205,7 +223,7 @@ describe("startRepl", () => {
       maxPlanIterations: 3,
     };
 
-    const replPromise = startRepl(customOptions, "0.1.0");
+    const replPromise = startRepl(customOptions, "0.1.0", undefined, DUMMY_HISTORY_FILE);
 
     await answerPrompt("テスト");
     await answerPrompt("exit");
@@ -223,7 +241,7 @@ describe("startRepl", () => {
   });
 
   it("プロンプト入力中の Ctrl+C は空文字扱いで再プロンプトされる", async () => {
-    const replPromise = startRepl(defaultReplOptions, "0.1.0");
+    const replPromise = startRepl(defaultReplOptions, "0.1.0", undefined, DUMMY_HISTORY_FILE);
 
     // Ctrl+C → 空文字 resolve → 再プロンプト
     await simulateSigint();
@@ -244,7 +262,7 @@ describe("startRepl", () => {
 
     const stderrSpy = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
 
-    const replPromise = startRepl(defaultReplOptions, "0.1.0");
+    const replPromise = startRepl(defaultReplOptions, "0.1.0", undefined, DUMMY_HISTORY_FILE);
 
     await answerPrompt("中断されるプロンプト");
     await answerPrompt("正常なプロンプト");
@@ -265,7 +283,7 @@ describe("startRepl", () => {
   it("activeOptionsLine 未指定 → ⚙ オプション を含む出力がない", async () => {
     const stderrSpy = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
 
-    const replPromise = startRepl(defaultReplOptions, "0.1.0");
+    const replPromise = startRepl(defaultReplOptions, "0.1.0", undefined, DUMMY_HISTORY_FILE);
     await answerPrompt("exit");
     await replPromise;
 
@@ -282,6 +300,7 @@ describe("startRepl", () => {
       defaultReplOptions,
       "0.1.0",
       "⚙ オプション: --debug",
+      DUMMY_HISTORY_FILE,
     );
     await answerPrompt("exit");
     await replPromise;
@@ -294,5 +313,169 @@ describe("startRepl", () => {
     expect(optionsIdx).toBeGreaterThan(welcomeIdx);
 
     stderrSpy.mockRestore();
+  });
+
+  // ── ヒストリー機能テスト ──
+
+  it("createInterface に history コピーが渡される", async () => {
+    mockReadFileSync.mockReturnValue("previous1\nprevious2\n");
+
+    const capturedHistories: unknown[] = [];
+    const { createInterface } = await import("node:readline");
+    const mockCreateInterface = vi.mocked(createInterface);
+    mockCreateInterface.mockImplementation(((opts: Record<string, unknown>) => {
+      lastCreateInterfaceOptions = opts;
+      capturedHistories.push(opts.history);
+      mockRlInstance = {
+        question: vi.fn((_prompt: string, cb: (answer: string) => void) => {
+          questionCallbacks.push(cb);
+        }),
+        close: vi.fn(),
+        on: vi.fn((event: string, cb: () => void) => {
+          if (event === "close") closeListeners.push(cb);
+          if (event === "SIGINT") sigintListeners.push(cb);
+        }),
+        removeListener: vi.fn(),
+      };
+      return mockRlInstance;
+    }) as unknown as typeof createInterface);
+
+    const replPromise = startRepl(defaultReplOptions, "0.1.0", undefined, DUMMY_HISTORY_FILE);
+
+    await answerPrompt("new input");
+    await answerPrompt("exit");
+    await replPromise;
+
+    // 最初の呼び出しでファイルから読み込んだ履歴が渡されること
+    expect(capturedHistories[0]).toEqual(["previous1", "previous2"]);
+    // 2回目は新しい入力が追加された履歴が渡されること
+    expect(capturedHistories[1]).toEqual(["new input", "previous1", "previous2"]);
+    // 各呼び出しで異なる配列参照（コピー）であること
+    expect(capturedHistories[0]).not.toBe(capturedHistories[1]);
+  });
+
+  it("入力後にヒストリーファイルが保存される", async () => {
+    const replPromise = startRepl(defaultReplOptions, "0.1.0", undefined, DUMMY_HISTORY_FILE);
+
+    await answerPrompt("hello world");
+    await answerPrompt("exit");
+    await replPromise;
+
+    expect(mockWriteFileSync).toHaveBeenCalledWith(
+      DUMMY_HISTORY_FILE,
+      "hello world\n",
+      { mode: 0o600 },
+    );
+    expect(mockChmodSync).toHaveBeenCalledWith(DUMMY_HISTORY_FILE, 0o600);
+  });
+
+  it("exit はヒストリーに保存されない", async () => {
+    const replPromise = startRepl(defaultReplOptions, "0.1.0", undefined, DUMMY_HISTORY_FILE);
+
+    await answerPrompt("exit");
+    await replPromise;
+
+    expect(mockWriteFileSync).not.toHaveBeenCalled();
+  });
+
+  it("quit はヒストリーに保存されない", async () => {
+    const replPromise = startRepl(defaultReplOptions, "0.1.0", undefined, DUMMY_HISTORY_FILE);
+
+    await answerPrompt("quit");
+    await replPromise;
+
+    expect(mockWriteFileSync).not.toHaveBeenCalled();
+  });
+
+  it("連続重複は保存されない", async () => {
+    const replPromise = startRepl(defaultReplOptions, "0.1.0", undefined, DUMMY_HISTORY_FILE);
+
+    await answerPrompt("same input");
+    await answerPrompt("same input");
+    await answerPrompt("exit");
+    await replPromise;
+
+    // writeFileSync は2回呼ばれるが、内容は両方とも "same input\n"（1エントリのみ）
+    expect(mockWriteFileSync).toHaveBeenCalledTimes(2);
+    expect(mockWriteFileSync).toHaveBeenLastCalledWith(
+      DUMMY_HISTORY_FILE,
+      "same input\n",
+      { mode: 0o600 },
+    );
+  });
+
+  it("ファイル読み込み失敗時に空配列で継続する", async () => {
+    mockReadFileSync.mockImplementation(() => { throw new Error("ENOENT"); });
+
+    const replPromise = startRepl(defaultReplOptions, "0.1.0", undefined, DUMMY_HISTORY_FILE);
+
+    await answerPrompt("テスト");
+    await answerPrompt("exit");
+    await replPromise;
+
+    // REPL が正常に動作すること
+    expect(mockRunWorkflow).toHaveBeenCalledTimes(1);
+  });
+
+  it("読み込み時に各行が trim されて正規化される", async () => {
+    mockReadFileSync.mockReturnValue("  padded  \n\ttabbed\t\n  \n normal\n");
+
+    const replPromise = startRepl(defaultReplOptions, "0.1.0", undefined, DUMMY_HISTORY_FILE);
+    await answerPrompt("exit");
+    await replPromise;
+
+    // createInterface に渡された history が trim 済みで空行が除去されていること
+    const passedHistory = lastCreateInterfaceOptions.history as string[];
+    expect(passedHistory).toEqual(["padded", "tabbed", "normal"]);
+  });
+
+  it("ヒストリーが上限500件に制限される", async () => {
+    // 600 行のヒストリーファイルを用意
+    const lines = Array.from({ length: 600 }, (_, i) => `entry${i}`);
+    mockReadFileSync.mockReturnValue(lines.join("\n") + "\n");
+
+    const replPromise = startRepl(defaultReplOptions, "0.1.0", undefined, DUMMY_HISTORY_FILE);
+    await answerPrompt("exit");
+    await replPromise;
+
+    // loadHistory で 500 件に切り詰められること
+    const passedHistory = lastCreateInterfaceOptions.history as string[];
+    expect(passedHistory).toHaveLength(500);
+    expect(passedHistory[0]).toBe("entry0");
+    expect(passedHistory[499]).toBe("entry499");
+  });
+
+  it("ヒストリー追加時に上限500件を超えると古い履歴が削除される", async () => {
+    // ちょうど 500 件のヒストリーを用意
+    const lines = Array.from({ length: 500 }, (_, i) => `old${i}`);
+    mockReadFileSync.mockReturnValue(lines.join("\n") + "\n");
+
+    const replPromise = startRepl(defaultReplOptions, "0.1.0", undefined, DUMMY_HISTORY_FILE);
+    await answerPrompt("new entry");
+    await answerPrompt("exit");
+    await replPromise;
+
+    // saveHistory で書き込まれた内容を検証
+    const writtenContent = mockWriteFileSync.mock.calls[0][1] as string;
+    const writtenLines = writtenContent.split("\n").filter((s: string) => s.length > 0);
+    expect(writtenLines).toHaveLength(500);
+    expect(writtenLines[0]).toBe("new entry");
+    // 最後の古い履歴 (old499) が押し出されていること
+    expect(writtenLines).not.toContain("old499");
+    expect(writtenLines[499]).toBe("old498");
+  });
+
+  it("ファイル書き込み失敗時にも REPL が継続する", async () => {
+    mockWriteFileSync.mockImplementation(() => { throw new Error("EACCES"); });
+
+    const replPromise = startRepl(defaultReplOptions, "0.1.0", undefined, DUMMY_HISTORY_FILE);
+
+    await answerPrompt("1つ目");
+    await answerPrompt("2つ目");
+    await answerPrompt("exit");
+    await replPromise;
+
+    // 書き込み失敗しても REPL が中断しないこと
+    expect(mockRunWorkflow).toHaveBeenCalledTimes(2);
   });
 });
