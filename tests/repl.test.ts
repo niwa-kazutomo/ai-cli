@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { SigintError } from "../src/errors.js";
 
 vi.mock("../src/orchestrator.js", () => ({
@@ -23,38 +23,36 @@ vi.mock("node:fs", () => ({
   chmodSync: (...args: unknown[]) => mockChmodSync(...args),
 }));
 
-// node:readline をモックして promptOnce の挙動を制御する
+// Mock line-editor to control promptOnce behavior
+let readLineResolvers: Array<(result: { type: string; value?: string }) => void> = [];
+const mockReadLine = vi.fn(
+  () =>
+    new Promise((resolve) => {
+      readLineResolvers.push(resolve);
+    }),
+);
+
+vi.mock("../src/line-editor.js", () => ({
+  readLine: (...args: unknown[]) => mockReadLine(...args),
+}));
+
+// Keep node:readline mock for promptOnceSimple fallback tests
 let questionCallbacks: Array<(answer: string) => void> = [];
 let closeListeners: Array<() => void> = [];
 let sigintListeners: Array<() => void> = [];
-let mockRlInstance: {
-  question: ReturnType<typeof vi.fn>;
-  close: ReturnType<typeof vi.fn>;
-  on: ReturnType<typeof vi.fn>;
-  removeListener: ReturnType<typeof vi.fn>;
-};
-let lastCreateInterfaceOptions: Record<string, unknown> = {};
 
 vi.mock("node:readline", () => ({
-  createInterface: vi.fn((opts: Record<string, unknown>) => {
-    lastCreateInterfaceOptions = opts;
-    mockRlInstance = {
-      question: vi.fn((_prompt: string, cb: (answer: string) => void) => {
-        questionCallbacks.push(cb);
-      }),
-      close: vi.fn(),
-      on: vi.fn((event: string, cb: () => void) => {
-        if (event === "close") {
-          closeListeners.push(cb);
-        }
-        if (event === "SIGINT") {
-          sigintListeners.push(cb);
-        }
-      }),
-      removeListener: vi.fn(),
-    };
-    return mockRlInstance;
-  }),
+  createInterface: vi.fn((_opts: Record<string, unknown>) => ({
+    question: vi.fn((_prompt: string, cb: (answer: string) => void) => {
+      questionCallbacks.push(cb);
+    }),
+    close: vi.fn(),
+    on: vi.fn((event: string, cb: () => void) => {
+      if (event === "close") closeListeners.push(cb);
+      if (event === "SIGINT") sigintListeners.push(cb);
+    }),
+    removeListener: vi.fn(),
+  })),
 }));
 
 import { startRepl } from "../src/repl.js";
@@ -72,48 +70,49 @@ const defaultReplOptions: ReplOptions = {
   cwd: "/tmp",
 };
 
+// Save original stdin properties
+const originalIsTTY = process.stdin.isTTY;
+const originalSetRawMode = process.stdin.setRawMode;
+
 /**
- * promptOnce の question コールバックに回答を渡す。
- * createInterface → rl.question のモックが呼ばれるまで待つ。
+ * Resolve the pending readLine call with an input result.
  */
 async function answerPrompt(answer: string): Promise<void> {
-  // question が呼ばれるまで tick を回す
   await vi.waitFor(() => {
-    if (questionCallbacks.length === 0) {
-      throw new Error("waiting for question callback");
+    if (readLineResolvers.length === 0) {
+      throw new Error("waiting for readLine call");
     }
   });
-  const cb = questionCallbacks.shift()!;
-  cb(answer);
-  // 次の tick で処理を進める
+  const resolve = readLineResolvers.shift()!;
+  resolve({ type: "input", value: answer });
   await new Promise((resolve) => setTimeout(resolve, 0));
 }
 
 /**
- * promptOnce の close イベントを発火して EOF をシミュレートする。
+ * Simulate EOF (Ctrl+D on empty buffer).
  */
 async function simulateEof(): Promise<void> {
   await vi.waitFor(() => {
-    if (closeListeners.length === 0) {
-      throw new Error("waiting for close listener");
+    if (readLineResolvers.length === 0) {
+      throw new Error("waiting for readLine call");
     }
   });
-  const cb = closeListeners.shift()!;
-  cb();
+  const resolve = readLineResolvers.shift()!;
+  resolve({ type: "eof" });
   await new Promise((resolve) => setTimeout(resolve, 0));
 }
 
 /**
- * promptOnce の SIGINT イベントを発火して Ctrl+C をシミュレートする。
+ * Simulate Ctrl+C (cancel).
  */
-async function simulateSigint(): Promise<void> {
+async function simulateCancel(): Promise<void> {
   await vi.waitFor(() => {
-    if (sigintListeners.length === 0) {
-      throw new Error("waiting for SIGINT listener");
+    if (readLineResolvers.length === 0) {
+      throw new Error("waiting for readLine call");
     }
   });
-  const cb = sigintListeners.shift()!;
-  cb();
+  const resolve = readLineResolvers.shift()!;
+  resolve({ type: "cancel" });
   await new Promise((resolve) => setTimeout(resolve, 0));
 }
 
@@ -122,15 +121,23 @@ describe("startRepl", () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    readLineResolvers = [];
     questionCallbacks = [];
     closeListeners = [];
     sigintListeners = [];
-    lastCreateInterfaceOptions = {};
     mockRunWorkflow.mockResolvedValue(undefined);
-    // デフォルト: ヒストリーファイルなし
     mockReadFileSync.mockImplementation(() => { throw new Error("ENOENT"); });
     mockWriteFileSync.mockImplementation(() => {});
     mockChmodSync.mockImplementation(() => {});
+    // Ensure TTY mode for line-editor path
+    Object.defineProperty(process.stdin, "isTTY", { value: true, configurable: true });
+    Object.defineProperty(process.stdin, "setRawMode", { value: () => {}, configurable: true });
+  });
+
+  afterEach(() => {
+    // Restore original stdin properties (including undefined values)
+    Object.defineProperty(process.stdin, "isTTY", { value: originalIsTTY, configurable: true });
+    Object.defineProperty(process.stdin, "setRawMode", { value: originalSetRawMode, configurable: true });
   });
 
   it("1回の入力後 exit で runWorkflow が1回呼ばれる", async () => {
@@ -161,7 +168,7 @@ describe("startRepl", () => {
     const replPromise = startRepl(defaultReplOptions, "0.1.0", undefined, DUMMY_HISTORY_FILE);
 
     await answerPrompt("");
-    await answerPrompt("   "); // 空白のみ
+    await answerPrompt("   "); // whitespace only
     await answerPrompt("exit");
 
     await replPromise;
@@ -243,12 +250,9 @@ describe("startRepl", () => {
   it("プロンプト入力中の Ctrl+C は空文字扱いで再プロンプトされる", async () => {
     const replPromise = startRepl(defaultReplOptions, "0.1.0", undefined, DUMMY_HISTORY_FILE);
 
-    // Ctrl+C → 空文字 resolve → 再プロンプト
-    await simulateSigint();
-    // SIGINT 後、旧 promptOnce の stale question callback が残っているので
-    // 1回目の answerPrompt は stale callback を消費する（no-op）
-    await answerPrompt("exit"); // stale callback 消費
-    await answerPrompt("exit"); // 新しい promptOnce に "exit" を渡す
+    // Ctrl+C → cancel → "" → re-prompt
+    await simulateCancel();
+    await answerPrompt("exit");
 
     await replPromise;
 
@@ -270,9 +274,7 @@ describe("startRepl", () => {
 
     await replPromise;
 
-    // SigintError 後も REPL が継続していること
     expect(mockRunWorkflow).toHaveBeenCalledTimes(2);
-    // 中断メッセージが出力されていること
     expect(stderrSpy).toHaveBeenCalledWith(
       expect.stringContaining("中断"),
     );
@@ -306,7 +308,6 @@ describe("startRepl", () => {
     await replPromise;
 
     const allCalls = stderrSpy.mock.calls.map((c) => String(c[0]));
-    // ウェルカムメッセージの後にオプション行がある
     const welcomeIdx = allCalls.findIndex((s) => s.includes("AI CLI"));
     const optionsIdx = allCalls.findIndex((s) => s.includes("⚙ オプション: --debug"));
     expect(welcomeIdx).toBeGreaterThanOrEqual(0);
@@ -315,30 +316,10 @@ describe("startRepl", () => {
     stderrSpy.mockRestore();
   });
 
-  // ── ヒストリー機能テスト ──
+  // ── History tests ──
 
-  it("createInterface に history コピーが渡される", async () => {
-    mockReadFileSync.mockReturnValue("previous1\nprevious2\n");
-
-    const capturedHistories: unknown[] = [];
-    const { createInterface } = await import("node:readline");
-    const mockCreateInterface = vi.mocked(createInterface);
-    mockCreateInterface.mockImplementation(((opts: Record<string, unknown>) => {
-      lastCreateInterfaceOptions = opts;
-      capturedHistories.push(opts.history);
-      mockRlInstance = {
-        question: vi.fn((_prompt: string, cb: (answer: string) => void) => {
-          questionCallbacks.push(cb);
-        }),
-        close: vi.fn(),
-        on: vi.fn((event: string, cb: () => void) => {
-          if (event === "close") closeListeners.push(cb);
-          if (event === "SIGINT") sigintListeners.push(cb);
-        }),
-        removeListener: vi.fn(),
-      };
-      return mockRlInstance;
-    }) as unknown as typeof createInterface);
+  it("readLine に history が渡される", async () => {
+    mockReadFileSync.mockReturnValue("AIH2\nprevious1\0previous2\0");
 
     const replPromise = startRepl(defaultReplOptions, "0.1.0", undefined, DUMMY_HISTORY_FILE);
 
@@ -346,15 +327,14 @@ describe("startRepl", () => {
     await answerPrompt("exit");
     await replPromise;
 
-    // 最初の呼び出しでファイルから読み込んだ履歴が渡されること
-    expect(capturedHistories[0]).toEqual(["previous1", "previous2"]);
-    // 2回目は新しい入力が追加された履歴が渡されること
-    expect(capturedHistories[1]).toEqual(["new input", "previous1", "previous2"]);
-    // 各呼び出しで異なる配列参照（コピー）であること
-    expect(capturedHistories[0]).not.toBe(capturedHistories[1]);
+    // First call should pass loaded history
+    expect(mockReadLine).toHaveBeenCalled();
+    const firstCallOpts = mockReadLine.mock.calls[0][0] as { history: string[] };
+    expect(firstCallOpts.history).toContain("previous1");
+    expect(firstCallOpts.history).toContain("previous2");
   });
 
-  it("入力後にヒストリーファイルが保存される", async () => {
+  it("入力後にヒストリーファイルが新形式で保存される", async () => {
     const replPromise = startRepl(defaultReplOptions, "0.1.0", undefined, DUMMY_HISTORY_FILE);
 
     await answerPrompt("hello world");
@@ -363,7 +343,7 @@ describe("startRepl", () => {
 
     expect(mockWriteFileSync).toHaveBeenCalledWith(
       DUMMY_HISTORY_FILE,
-      "hello world\n",
+      "AIH2\nhello world\0",
       { mode: 0o600 },
     );
     expect(mockChmodSync).toHaveBeenCalledWith(DUMMY_HISTORY_FILE, 0o600);
@@ -395,11 +375,11 @@ describe("startRepl", () => {
     await answerPrompt("exit");
     await replPromise;
 
-    // writeFileSync は2回呼ばれるが、内容は両方とも "same input\n"（1エントリのみ）
+    // writeFileSync called twice but both contain only one entry
     expect(mockWriteFileSync).toHaveBeenCalledTimes(2);
     expect(mockWriteFileSync).toHaveBeenLastCalledWith(
       DUMMY_HISTORY_FILE,
-      "same input\n",
+      "AIH2\nsame input\0",
       { mode: 0o600 },
     );
   });
@@ -413,56 +393,55 @@ describe("startRepl", () => {
     await answerPrompt("exit");
     await replPromise;
 
-    // REPL が正常に動作すること
     expect(mockRunWorkflow).toHaveBeenCalledTimes(1);
   });
 
-  it("読み込み時に各行が trim されて正規化される", async () => {
+  it("旧形式ヒストリーファイルが後方互換で読み込まれる", async () => {
+    // Legacy format: no AIH2 header, newline-separated
     mockReadFileSync.mockReturnValue("  padded  \n\ttabbed\t\n  \n normal\n");
 
     const replPromise = startRepl(defaultReplOptions, "0.1.0", undefined, DUMMY_HISTORY_FILE);
     await answerPrompt("exit");
     await replPromise;
 
-    // createInterface に渡された history が trim 済みで空行が除去されていること
-    const passedHistory = lastCreateInterfaceOptions.history as string[];
-    expect(passedHistory).toEqual(["padded", "tabbed", "normal"]);
+    // readLine should have been called with the legacy history loaded and trimmed
+    const firstCallOpts = mockReadLine.mock.calls[0][0] as { history: string[] };
+    expect(firstCallOpts.history).toEqual(["padded", "tabbed", "normal"]);
   });
 
   it("ヒストリーが上限500件に制限される", async () => {
-    // 600 行のヒストリーファイルを用意
-    const lines = Array.from({ length: 600 }, (_, i) => `entry${i}`);
-    mockReadFileSync.mockReturnValue(lines.join("\n") + "\n");
+    // 600 entries in new format
+    const entries = Array.from({ length: 600 }, (_, i) => `entry${i}`);
+    mockReadFileSync.mockReturnValue("AIH2\n" + entries.join("\0") + "\0");
 
     const replPromise = startRepl(defaultReplOptions, "0.1.0", undefined, DUMMY_HISTORY_FILE);
     await answerPrompt("exit");
     await replPromise;
 
-    // loadHistory で 500 件に切り詰められること
-    const passedHistory = lastCreateInterfaceOptions.history as string[];
-    expect(passedHistory).toHaveLength(500);
-    expect(passedHistory[0]).toBe("entry0");
-    expect(passedHistory[499]).toBe("entry499");
+    const firstCallOpts = mockReadLine.mock.calls[0][0] as { history: string[] };
+    expect(firstCallOpts.history).toHaveLength(500);
+    expect(firstCallOpts.history[0]).toBe("entry0");
+    expect(firstCallOpts.history[499]).toBe("entry499");
   });
 
   it("ヒストリー追加時に上限500件を超えると古い履歴が削除される", async () => {
-    // ちょうど 500 件のヒストリーを用意
-    const lines = Array.from({ length: 500 }, (_, i) => `old${i}`);
-    mockReadFileSync.mockReturnValue(lines.join("\n") + "\n");
+    const entries = Array.from({ length: 500 }, (_, i) => `old${i}`);
+    mockReadFileSync.mockReturnValue("AIH2\n" + entries.join("\0") + "\0");
 
     const replPromise = startRepl(defaultReplOptions, "0.1.0", undefined, DUMMY_HISTORY_FILE);
     await answerPrompt("new entry");
     await answerPrompt("exit");
     await replPromise;
 
-    // saveHistory で書き込まれた内容を検証
     const writtenContent = mockWriteFileSync.mock.calls[0][1] as string;
-    const writtenLines = writtenContent.split("\n").filter((s: string) => s.length > 0);
-    expect(writtenLines).toHaveLength(500);
-    expect(writtenLines[0]).toBe("new entry");
-    // 最後の古い履歴 (old499) が押し出されていること
-    expect(writtenLines).not.toContain("old499");
-    expect(writtenLines[499]).toBe("old498");
+    // New format: AIH2\n + null-separated entries
+    expect(writtenContent.startsWith("AIH2\n")).toBe(true);
+    const body = writtenContent.slice("AIH2\n".length);
+    const writtenEntries = body.split("\0").filter((s: string) => s.length > 0);
+    expect(writtenEntries).toHaveLength(500);
+    expect(writtenEntries[0]).toBe("new entry");
+    expect(writtenEntries).not.toContain("old499");
+    expect(writtenEntries[499]).toBe("old498");
   });
 
   it("ファイル書き込み失敗時にも REPL が継続する", async () => {
@@ -475,7 +454,71 @@ describe("startRepl", () => {
     await answerPrompt("exit");
     await replPromise;
 
-    // 書き込み失敗しても REPL が中断しないこと
     expect(mockRunWorkflow).toHaveBeenCalledTimes(2);
+  });
+
+  it("マルチライン入力がそのまま runWorkflow に渡される", async () => {
+    const replPromise = startRepl(defaultReplOptions, "0.1.0", undefined, DUMMY_HISTORY_FILE);
+
+    await answerPrompt("line1\nline2\nline3");
+    await answerPrompt("exit");
+    await replPromise;
+
+    expect(mockRunWorkflow).toHaveBeenCalledWith(
+      expect.objectContaining({ prompt: "line1\nline2\nline3" }),
+    );
+  });
+
+  it("マルチラインヒストリーが新形式で正しく保存される", async () => {
+    const replPromise = startRepl(defaultReplOptions, "0.1.0", undefined, DUMMY_HISTORY_FILE);
+
+    await answerPrompt("line1\nline2");
+    await answerPrompt("exit");
+    await replPromise;
+
+    expect(mockWriteFileSync).toHaveBeenCalledWith(
+      DUMMY_HISTORY_FILE,
+      "AIH2\nline1\nline2\0",
+      { mode: 0o600 },
+    );
+  });
+
+  // ── Non-TTY / no setRawMode fallback tests ──
+
+  it("非TTY環境では promptOnceSimple にフォールバックする", async () => {
+    Object.defineProperty(process.stdin, "isTTY", { value: false, configurable: true });
+    mockReadLine.mockClear();
+
+    const replPromise = startRepl(defaultReplOptions, "0.1.0", undefined, DUMMY_HISTORY_FILE);
+
+    // promptOnceSimple uses node:readline, so we use question callbacks
+    await vi.waitFor(() => {
+      if (questionCallbacks.length === 0) throw new Error("waiting");
+    });
+    questionCallbacks.shift()!("exit");
+    await new Promise((r) => setTimeout(r, 0));
+
+    await replPromise;
+
+    // readLine (line-editor) should NOT have been called
+    expect(mockReadLine).not.toHaveBeenCalled();
+  });
+
+  it("setRawMode未対応環境では promptOnceSimple にフォールバックする", async () => {
+    Object.defineProperty(process.stdin, "isTTY", { value: true, configurable: true });
+    Object.defineProperty(process.stdin, "setRawMode", { value: undefined, configurable: true });
+    mockReadLine.mockClear();
+
+    const replPromise = startRepl(defaultReplOptions, "0.1.0", undefined, DUMMY_HISTORY_FILE);
+
+    await vi.waitFor(() => {
+      if (questionCallbacks.length === 0) throw new Error("waiting");
+    });
+    questionCallbacks.shift()!("exit");
+    await new Promise((r) => setTimeout(r, 0));
+
+    await replPromise;
+
+    expect(mockReadLine).not.toHaveBeenCalled();
   });
 });

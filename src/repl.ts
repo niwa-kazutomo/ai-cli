@@ -3,21 +3,25 @@ import { readFileSync, writeFileSync, chmodSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { runWorkflow } from "./orchestrator.js";
+import { readLine } from "./line-editor.js";
 import { SigintError } from "./errors.js";
-import { REPL_PROMPT, REPL_MESSAGES } from "./constants.js";
+import { REPL_PROMPT, REPL_CONTINUATION_PROMPT, REPL_MESSAGES } from "./constants.js";
 import * as logger from "./logger.js";
 import type { ReplOptions } from "./types.js";
 
 const HISTORY_FILE = join(homedir(), ".ai_cli_history");
 const MAX_HISTORY_SIZE = 500;
+const HISTORY_FORMAT_HEADER = "AIH2\n";
 
 function loadHistory(filePath: string): string[] {
   try {
-    return readFileSync(filePath, "utf-8")
-      .split("\n")
-      .map((s) => s.trim())
-      .filter((s) => s.length > 0)
-      .slice(0, MAX_HISTORY_SIZE);
+    const content = readFileSync(filePath, "utf-8");
+    if (content.startsWith(HISTORY_FORMAT_HEADER)) {
+      const body = content.slice(HISTORY_FORMAT_HEADER.length);
+      return body.split("\0").filter((s) => s.length > 0).slice(0, MAX_HISTORY_SIZE);
+    }
+    // Legacy format fallback: newline-separated
+    return content.split("\n").map((s) => s.trim()).filter((s) => s.length > 0).slice(0, MAX_HISTORY_SIZE);
   } catch {
     return [];
   }
@@ -25,7 +29,8 @@ function loadHistory(filePath: string): string[] {
 
 function saveHistory(filePath: string, history: string[]): void {
   try {
-    writeFileSync(filePath, history.slice(0, MAX_HISTORY_SIZE).join("\n") + "\n", { mode: 0o600 });
+    const body = history.slice(0, MAX_HISTORY_SIZE).join("\0") + "\0";
+    writeFileSync(filePath, HISTORY_FORMAT_HEADER + body, { mode: 0o600 });
     chmodSync(filePath, 0o600);
   } catch (err) {
     logger.debug(`ヒストリーファイルの保存に失敗: ${err instanceof Error ? err.message : String(err)}`);
@@ -33,12 +38,10 @@ function saveHistory(filePath: string, history: string[]): void {
 }
 
 /**
- * プロンプトを1行読み取って返す。
- * ワークフロー実行中は readline が存在しないため、user-interaction.ts と競合しない。
- *
- * @returns 入力文字列。Ctrl+C → ""（再プロンプト）、EOF (Ctrl+D) → null。
+ * Fallback prompt for non-TTY or environments without setRawMode.
+ * Uses node:readline createInterface.
  */
-function promptOnce(history: string[]): Promise<string | null> {
+function promptOnceSimple(history: string[]): Promise<string | null> {
   return new Promise((resolve) => {
     const rl = createInterface({
       input: process.stdin,
@@ -52,14 +55,14 @@ function promptOnce(history: string[]): Promise<string | null> {
       if (!settled) {
         settled = true;
         rl.close();
-        resolve(""); // Ctrl+C → 空文字 → ループで continue → 再プロンプト
+        resolve("");
       }
     });
 
     rl.on("close", () => {
       if (!settled) {
         settled = true;
-        resolve(null); // EOF
+        resolve(null);
       }
     });
 
@@ -71,6 +74,30 @@ function promptOnce(history: string[]): Promise<string | null> {
       }
     });
   });
+}
+
+/**
+ * Read one prompt input. Uses the custom line editor for TTY with setRawMode,
+ * falls back to node:readline otherwise.
+ *
+ * @returns Input string. Ctrl+C → "" (re-prompt), EOF (Ctrl+D) → null.
+ */
+async function promptOnce(history: string[]): Promise<string | null> {
+  if (!process.stdin.isTTY || typeof process.stdin.setRawMode !== "function") {
+    return promptOnceSimple(history);
+  }
+  const result = await readLine({
+    prompt: REPL_PROMPT,
+    continuationPrompt: REPL_CONTINUATION_PROMPT,
+    history,
+    output: process.stderr,
+    input: process.stdin,
+  });
+  switch (result.type) {
+    case "input": return result.value;
+    case "cancel": return "";
+    case "eof": return null;
+  }
 }
 
 export async function startRepl(
@@ -97,30 +124,27 @@ export async function startRepl(
 
     const trimmed = result.trim();
 
-    if (!trimmed) continue; // 空入力・空白のみ → 再プロンプト
+    if (!trimmed) continue;
 
     if (trimmed === "exit" || trimmed === "quit") {
       process.stderr.write(`${REPL_MESSAGES.GOODBYE}\n`);
       break;
     }
 
-    // マスター履歴を手動管理（連続重複のみ除去）
-    if (history[0] !== trimmed) {
-      history.unshift(trimmed);
+    // Save raw input to history (dedup consecutive)
+    if (history[0] !== result) {
+      history.unshift(result);
       if (history.length > MAX_HISTORY_SIZE) history.pop();
     }
     saveHistory(historyFile, history);
 
-    // ワークフロー実行中は process レベルの SIGINT を飲み込み、親プロセスの終了を防ぐ。
-    // 子プロセスにはプロセスグループ経由で SIGINT が届く。
-    // confirmYesNo/askQuestions は独自の readline SIGINT ハンドラで SigintError を throw する。
     const sigintHandler = () => {
-      /* swallow — 子プロセスや readline 側で処理される */
+      /* swallow — handled by child processes or readline */
     };
     process.on("SIGINT", sigintHandler);
 
     try {
-      await runWorkflow({ ...options, prompt: trimmed });
+      await runWorkflow({ ...options, prompt: result });
     } catch (err) {
       if (err instanceof SigintError) {
         process.stderr.write("\n⚠ 中断しました。\n");

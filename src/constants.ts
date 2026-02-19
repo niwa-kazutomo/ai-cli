@@ -1,4 +1,5 @@
 export const REPL_PROMPT = "ai> ";
+export const REPL_CONTINUATION_PROMPT = "... ";
 export const REPL_MESSAGES = {
   WELCOME: (version: string) =>
     `\n🤖 AI CLI v${version}\nプロンプトを入力してください。終了: "exit" / "quit" / Ctrl+D\n\n`,
