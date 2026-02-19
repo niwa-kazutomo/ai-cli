@@ -42,7 +42,7 @@ vi.mock("../src/logger.js", () => ({
   configureLogger: vi.fn(),
 }));
 
-import { runWorkflow } from "../src/orchestrator.js";
+import { runWorkflow, isDiffLikeResponse } from "../src/orchestrator.js";
 import * as claudeCode from "../src/claude-code.js";
 import * as codex from "../src/codex.js";
 import { judgeReview } from "../src/review-judge.js";
@@ -218,6 +218,10 @@ describe("orchestrator", () => {
     expect(mockClaudeCode.generatePlan).toHaveBeenCalledTimes(2);
     // Plan review: 2 rounds
     expect(mockCodex.reviewPlan).toHaveBeenCalledTimes(2);
+    // PLAN_REVISION プロンプトに currentPlan と「現在の計画」ヘッダが含まれること
+    const revisionPrompt = mockClaudeCode.generatePlan.mock.calls[1][1] as string;
+    expect(revisionPrompt).toContain("Plan");
+    expect(revisionPrompt).toContain("現在の計画");
   });
 
   it("2回目のプランレビューに修正後プラン本文が含まれる", async () => {
@@ -818,6 +822,9 @@ describe("orchestrator", () => {
     const revisionPrompt = mockClaudeCode.generatePlan.mock.calls[1][1] as string;
     expect(revisionPrompt).toContain(userInstruction);
     expect(revisionPrompt).toContain("ユーザーの修正指示");
+    // currentPlan テキストと「現在の計画」ヘッダが含まれること
+    expect(revisionPrompt).toContain("Initial plan");
+    expect(revisionPrompt).toContain("現在の計画");
   });
 
   it("ユーザー修正指示後のプランが空の場合エラーで停止する", async () => {
@@ -846,5 +853,580 @@ describe("orchestrator", () => {
     await expect(runWorkflow(defaultOptions)).rejects.toThrow("プラン修正結果が空です");
 
     expect(mockClaudeCode.generateCode).not.toHaveBeenCalled();
+  });
+
+  it("差分出力時にリトライが発生し、リトライプロンプトに必要な情報が含まれる", async () => {
+    const initialPlan = "A".repeat(200);
+    const diffResponse = "変更点は以下の通りです\n- 項目追加";
+    const retryFullPlan = "A".repeat(200) + "\n- 追加項目";
+
+    mockClaudeCode.generatePlan
+      .mockResolvedValueOnce({
+        response: initialPlan,
+        raw: { exitCode: 0, stdout: "", stderr: "" },
+      })
+      // ユーザー修正 → 差分出力
+      .mockResolvedValueOnce({
+        response: diffResponse,
+        raw: { exitCode: 0, stdout: "", stderr: "" },
+      })
+      // リトライ → 全文出力
+      .mockResolvedValueOnce({
+        response: retryFullPlan,
+        raw: { exitCode: 0, stdout: "", stderr: "" },
+      });
+
+    mockCodex.reviewPlan.mockResolvedValue({
+      response: "OK",
+      raw: { exitCode: 0, stdout: "", stderr: "" },
+    });
+
+    mockJudgeReview
+      .mockResolvedValueOnce(makeJudgment(false))
+      // re-review after user revision
+      .mockResolvedValueOnce(makeJudgment(false))
+      // code review
+      .mockResolvedValueOnce(makeJudgment(false));
+
+    mockUi.promptPlanApproval
+      .mockResolvedValueOnce({ action: "modify", instruction: "項目を追加して" })
+      .mockResolvedValueOnce({ action: "approve" });
+
+    mockClaudeCode.generateCode.mockResolvedValue({
+      response: "Code",
+      raw: { exitCode: 0, stdout: "", stderr: "" },
+    });
+    mockCodex.reviewCode.mockResolvedValue({
+      response: "LGTM",
+      raw: { exitCode: 0, stdout: "", stderr: "" },
+    });
+
+    await runWorkflow(defaultOptions);
+
+    // リトライが発生（3回目の generatePlan）
+    expect(mockClaudeCode.generatePlan).toHaveBeenCalledTimes(3);
+    // リトライプロンプトに lastKnownFullPlan と差分出力と修正要求が含まれること
+    const retryPrompt = mockClaudeCode.generatePlan.mock.calls[2][1] as string;
+    expect(retryPrompt).toContain(initialPlan);
+    expect(retryPrompt).toContain("項目を追加して");
+    expect(retryPrompt).toContain("ベースとなる計画");
+    expect(retryPrompt).toContain("先ほどの修正出力");
+  });
+
+  it("リトライ成功で全文が currentPlan になり、CODE_REVIEW に全文が渡る", async () => {
+    const initialPlan = "A".repeat(200);
+    const diffResponse = "変更点: エラー処理追加";
+    const retryFullPlan = "A".repeat(200) + "\nエラー処理追加";
+
+    mockClaudeCode.generatePlan
+      .mockResolvedValueOnce({
+        response: initialPlan,
+        raw: { exitCode: 0, stdout: "", stderr: "" },
+      })
+      .mockResolvedValueOnce({
+        response: diffResponse,
+        raw: { exitCode: 0, stdout: "", stderr: "" },
+      })
+      .mockResolvedValueOnce({
+        response: retryFullPlan,
+        raw: { exitCode: 0, stdout: "", stderr: "" },
+      });
+
+    mockCodex.reviewPlan.mockResolvedValue({
+      response: "OK",
+      raw: { exitCode: 0, stdout: "", stderr: "" },
+    });
+
+    mockJudgeReview
+      .mockResolvedValueOnce(makeJudgment(false))
+      .mockResolvedValueOnce(makeJudgment(false))
+      .mockResolvedValueOnce(makeJudgment(false));
+
+    mockUi.promptPlanApproval
+      .mockResolvedValueOnce({ action: "modify", instruction: "エラー処理追加" })
+      .mockResolvedValueOnce({ action: "approve" });
+
+    mockClaudeCode.generateCode.mockResolvedValue({
+      response: "Code",
+      raw: { exitCode: 0, stdout: "", stderr: "" },
+    });
+    mockCodex.reviewCode.mockResolvedValue({
+      response: "LGTM",
+      raw: { exitCode: 0, stdout: "", stderr: "" },
+    });
+
+    await runWorkflow(defaultOptions);
+
+    // CODE_REVIEW プロンプトにリトライ後の全文が渡ること
+    const codeReviewPrompt = mockCodex.reviewCode.mock.calls[0][0] as string;
+    expect(codeReviewPrompt).toContain(retryFullPlan);
+  });
+
+  it("リトライ失敗時に lastKnownFullPlan にフォールバック + 警告表示", async () => {
+    const initialPlan = "A".repeat(200);
+    const diffResponse = "変更点: 追加";
+    const retryDiffAgain = "まだ差分です";
+
+    mockClaudeCode.generatePlan
+      .mockResolvedValueOnce({
+        response: initialPlan,
+        raw: { exitCode: 0, stdout: "", stderr: "" },
+      })
+      .mockResolvedValueOnce({
+        response: diffResponse,
+        raw: { exitCode: 0, stdout: "", stderr: "" },
+      })
+      // リトライも差分（短い）→ フォールバック
+      .mockResolvedValueOnce({
+        response: retryDiffAgain,
+        raw: { exitCode: 0, stdout: "", stderr: "" },
+      });
+
+    mockCodex.reviewPlan.mockResolvedValue({
+      response: "OK",
+      raw: { exitCode: 0, stdout: "", stderr: "" },
+    });
+
+    mockJudgeReview
+      .mockResolvedValueOnce(makeJudgment(false))
+      .mockResolvedValueOnce(makeJudgment(false))
+      .mockResolvedValueOnce(makeJudgment(false));
+
+    mockUi.promptPlanApproval
+      .mockResolvedValueOnce({ action: "modify", instruction: "追加して" })
+      .mockResolvedValueOnce({ action: "approve" });
+
+    // フォールバック時の続行確認
+    mockUi.confirmYesNo.mockResolvedValue(true);
+
+    mockClaudeCode.generateCode.mockResolvedValue({
+      response: "Code",
+      raw: { exitCode: 0, stdout: "", stderr: "" },
+    });
+    mockCodex.reviewCode.mockResolvedValue({
+      response: "LGTM",
+      raw: { exitCode: 0, stdout: "", stderr: "" },
+    });
+
+    await runWorkflow(defaultOptions);
+
+    // 警告が表示されること
+    expect(mockUi.display).toHaveBeenCalledWith(
+      expect.stringContaining("修正指示が反映されていない可能性があります"),
+    );
+    // CODE_REVIEW に初回全文プランが渡ること（フォールバック）
+    const codeReviewPrompt = mockCodex.reviewCode.mock.calls[0][0] as string;
+    expect(codeReviewPrompt).toContain(initialPlan);
+  });
+
+  it("連続修正で2回目も差分出力された場合、初回の lastKnownFullPlan が維持される", async () => {
+    const initialPlan = "A".repeat(200);
+    const firstDiff = "変更点: 1回目";
+    const firstRetryFull = "A".repeat(200) + "\n1回目修正";
+    const secondDiff = "変更点: 2回目";
+    const secondRetryDiff = "まだ差分";
+
+    mockClaudeCode.generatePlan
+      .mockResolvedValueOnce({
+        response: initialPlan,
+        raw: { exitCode: 0, stdout: "", stderr: "" },
+      })
+      // 1回目修正: 差分
+      .mockResolvedValueOnce({
+        response: firstDiff,
+        raw: { exitCode: 0, stdout: "", stderr: "" },
+      })
+      // 1回目リトライ: 全文成功
+      .mockResolvedValueOnce({
+        response: firstRetryFull,
+        raw: { exitCode: 0, stdout: "", stderr: "" },
+      })
+      // 2回目修正: 差分
+      .mockResolvedValueOnce({
+        response: secondDiff,
+        raw: { exitCode: 0, stdout: "", stderr: "" },
+      })
+      // 2回目リトライ: また差分 → フォールバック
+      .mockResolvedValueOnce({
+        response: secondRetryDiff,
+        raw: { exitCode: 0, stdout: "", stderr: "" },
+      });
+
+    mockCodex.reviewPlan.mockResolvedValue({
+      response: "OK",
+      raw: { exitCode: 0, stdout: "", stderr: "" },
+    });
+
+    mockJudgeReview
+      .mockResolvedValueOnce(makeJudgment(false))
+      .mockResolvedValueOnce(makeJudgment(false))
+      .mockResolvedValueOnce(makeJudgment(false))
+      .mockResolvedValueOnce(makeJudgment(false));
+
+    mockUi.promptPlanApproval
+      .mockResolvedValueOnce({ action: "modify", instruction: "1回目" })
+      .mockResolvedValueOnce({ action: "modify", instruction: "2回目" })
+      .mockResolvedValueOnce({ action: "approve" });
+
+    // 2回目フォールバック時の続行確認
+    mockUi.confirmYesNo.mockResolvedValue(true);
+
+    mockClaudeCode.generateCode.mockResolvedValue({
+      response: "Code",
+      raw: { exitCode: 0, stdout: "", stderr: "" },
+    });
+    mockCodex.reviewCode.mockResolvedValue({
+      response: "LGTM",
+      raw: { exitCode: 0, stdout: "", stderr: "" },
+    });
+
+    await runWorkflow(defaultOptions);
+
+    // 2回目フォールバック時、lastKnownFullPlan は1回目リトライ成功時の全文
+    const codeReviewPrompt = mockCodex.reviewCode.mock.calls[0][0] as string;
+    expect(codeReviewPrompt).toContain(firstRetryFull);
+  });
+
+  it("パターン検知（'変更点...'で始まる長いレスポンス）でリトライが発動する", async () => {
+    const initialPlan = "A".repeat(100);
+    // 長いが先頭行が差分パターンに一致
+    const longDiffResponse = "変更点は2つです\n" + "B".repeat(200);
+    const retryFullPlan = "C".repeat(200);
+
+    mockClaudeCode.generatePlan
+      .mockResolvedValueOnce({
+        response: initialPlan,
+        raw: { exitCode: 0, stdout: "", stderr: "" },
+      })
+      .mockResolvedValueOnce({
+        response: longDiffResponse,
+        raw: { exitCode: 0, stdout: "", stderr: "" },
+      })
+      .mockResolvedValueOnce({
+        response: retryFullPlan,
+        raw: { exitCode: 0, stdout: "", stderr: "" },
+      });
+
+    mockCodex.reviewPlan.mockResolvedValue({
+      response: "OK",
+      raw: { exitCode: 0, stdout: "", stderr: "" },
+    });
+
+    mockJudgeReview
+      .mockResolvedValueOnce(makeJudgment(false))
+      .mockResolvedValueOnce(makeJudgment(false))
+      .mockResolvedValueOnce(makeJudgment(false));
+
+    mockUi.promptPlanApproval
+      .mockResolvedValueOnce({ action: "modify", instruction: "修正して" })
+      .mockResolvedValueOnce({ action: "approve" });
+
+    mockClaudeCode.generateCode.mockResolvedValue({
+      response: "Code",
+      raw: { exitCode: 0, stdout: "", stderr: "" },
+    });
+    mockCodex.reviewCode.mockResolvedValue({
+      response: "LGTM",
+      raw: { exitCode: 0, stdout: "", stderr: "" },
+    });
+
+    await runWorkflow(defaultOptions);
+
+    // リトライが発動（3回目の generatePlan）
+    expect(mockClaudeCode.generatePlan).toHaveBeenCalledTimes(3);
+    expect(mockUi.display).toHaveBeenCalledWith(
+      expect.stringContaining("差分出力を検知しました"),
+    );
+  });
+
+  it("unified diff 形式 (@@, +++/---) のレスポンスでリトライが発動する", async () => {
+    const initialPlan = "A".repeat(200);
+    const diffResponse = "以下の変更を適用:\n@@ -1,3 +1,4 @@\n line1\n+added\n line2\n" + "B".repeat(200);
+    const retryFullPlan = "A".repeat(200) + "\nadded";
+
+    mockClaudeCode.generatePlan
+      .mockResolvedValueOnce({
+        response: initialPlan,
+        raw: { exitCode: 0, stdout: "", stderr: "" },
+      })
+      .mockResolvedValueOnce({
+        response: diffResponse,
+        raw: { exitCode: 0, stdout: "", stderr: "" },
+      })
+      .mockResolvedValueOnce({
+        response: retryFullPlan,
+        raw: { exitCode: 0, stdout: "", stderr: "" },
+      });
+
+    mockCodex.reviewPlan.mockResolvedValue({
+      response: "OK",
+      raw: { exitCode: 0, stdout: "", stderr: "" },
+    });
+
+    mockJudgeReview
+      .mockResolvedValueOnce(makeJudgment(false))
+      .mockResolvedValueOnce(makeJudgment(false))
+      .mockResolvedValueOnce(makeJudgment(false));
+
+    mockUi.promptPlanApproval
+      .mockResolvedValueOnce({ action: "modify", instruction: "修正して" })
+      .mockResolvedValueOnce({ action: "approve" });
+
+    mockClaudeCode.generateCode.mockResolvedValue({
+      response: "Code",
+      raw: { exitCode: 0, stdout: "", stderr: "" },
+    });
+    mockCodex.reviewCode.mockResolvedValue({
+      response: "LGTM",
+      raw: { exitCode: 0, stdout: "", stderr: "" },
+    });
+
+    await runWorkflow(defaultOptions);
+
+    expect(mockClaudeCode.generatePlan).toHaveBeenCalledTimes(3);
+  });
+
+  it("リトライ API が throw した場合に lastKnownFullPlan にフォールバック + 警告表示", async () => {
+    const initialPlan = "A".repeat(200);
+    const diffResponse = "変更点: 追加";
+
+    mockClaudeCode.generatePlan
+      .mockResolvedValueOnce({
+        response: initialPlan,
+        raw: { exitCode: 0, stdout: "", stderr: "" },
+      })
+      .mockResolvedValueOnce({
+        response: diffResponse,
+        raw: { exitCode: 0, stdout: "", stderr: "" },
+      })
+      // リトライが throw
+      .mockRejectedValueOnce(new Error("API error"));
+
+    mockCodex.reviewPlan.mockResolvedValue({
+      response: "OK",
+      raw: { exitCode: 0, stdout: "", stderr: "" },
+    });
+
+    mockJudgeReview
+      .mockResolvedValueOnce(makeJudgment(false))
+      .mockResolvedValueOnce(makeJudgment(false))
+      .mockResolvedValueOnce(makeJudgment(false));
+
+    mockUi.promptPlanApproval
+      .mockResolvedValueOnce({ action: "modify", instruction: "追加して" })
+      .mockResolvedValueOnce({ action: "approve" });
+
+    mockUi.confirmYesNo.mockResolvedValue(true);
+
+    mockClaudeCode.generateCode.mockResolvedValue({
+      response: "Code",
+      raw: { exitCode: 0, stdout: "", stderr: "" },
+    });
+    mockCodex.reviewCode.mockResolvedValue({
+      response: "LGTM",
+      raw: { exitCode: 0, stdout: "", stderr: "" },
+    });
+
+    await runWorkflow(defaultOptions);
+
+    // フォールバック警告
+    expect(mockUi.display).toHaveBeenCalledWith(
+      expect.stringContaining("全文再取得に失敗しました"),
+    );
+    // CODE_REVIEW に初回プランが渡ること
+    const codeReviewPrompt = mockCodex.reviewCode.mock.calls[0][0] as string;
+    expect(codeReviewPrompt).toContain(initialPlan);
+  });
+
+  it("フォールバック確認で n を選んだ場合にワークフローが中止される", async () => {
+    const initialPlan = "A".repeat(200);
+    const diffResponse = "変更点: 追加";
+    const retryDiffAgain = "まだ差分";
+
+    mockClaudeCode.generatePlan
+      .mockResolvedValueOnce({
+        response: initialPlan,
+        raw: { exitCode: 0, stdout: "", stderr: "" },
+      })
+      .mockResolvedValueOnce({
+        response: diffResponse,
+        raw: { exitCode: 0, stdout: "", stderr: "" },
+      })
+      // リトライも差分 → フォールバック
+      .mockResolvedValueOnce({
+        response: retryDiffAgain,
+        raw: { exitCode: 0, stdout: "", stderr: "" },
+      });
+
+    mockCodex.reviewPlan.mockResolvedValue({
+      response: "OK",
+      raw: { exitCode: 0, stdout: "", stderr: "" },
+    });
+
+    mockJudgeReview.mockResolvedValue(makeJudgment(false));
+
+    mockUi.promptPlanApproval.mockResolvedValueOnce({
+      action: "modify",
+      instruction: "追加して",
+    });
+
+    // フォールバック確認で n → 中止
+    mockUi.confirmYesNo.mockResolvedValue(false);
+
+    await runWorkflow(defaultOptions);
+
+    // ワークフロー中止メッセージが表示されること
+    expect(mockUi.display).toHaveBeenCalledWith(
+      expect.stringContaining("中止"),
+    );
+    // コード生成に進んでいないこと
+    expect(mockClaudeCode.generateCode).not.toHaveBeenCalled();
+  });
+
+  it("正当に短くなったプラン（パターン不一致かつ 30%以上）がリトライされずそのまま採用される", async () => {
+    const initialPlan = "A".repeat(100);
+    // 30%以上でパターン不一致 → リトライされない
+    const shorterPlan = "B".repeat(40);
+
+    mockClaudeCode.generatePlan
+      .mockResolvedValueOnce({
+        response: initialPlan,
+        raw: { exitCode: 0, stdout: "", stderr: "" },
+      })
+      .mockResolvedValueOnce({
+        response: shorterPlan,
+        raw: { exitCode: 0, stdout: "", stderr: "" },
+      });
+
+    mockCodex.reviewPlan.mockResolvedValue({
+      response: "OK",
+      raw: { exitCode: 0, stdout: "", stderr: "" },
+    });
+
+    mockJudgeReview
+      .mockResolvedValueOnce(makeJudgment(false))
+      .mockResolvedValueOnce(makeJudgment(false))
+      .mockResolvedValueOnce(makeJudgment(false));
+
+    mockUi.promptPlanApproval
+      .mockResolvedValueOnce({ action: "modify", instruction: "簡略化して" })
+      .mockResolvedValueOnce({ action: "approve" });
+
+    mockClaudeCode.generateCode.mockResolvedValue({
+      response: "Code",
+      raw: { exitCode: 0, stdout: "", stderr: "" },
+    });
+    mockCodex.reviewCode.mockResolvedValue({
+      response: "LGTM",
+      raw: { exitCode: 0, stdout: "", stderr: "" },
+    });
+
+    await runWorkflow(defaultOptions);
+
+    // リトライなし（generatePlan は2回のみ: 初回 + ユーザー修正）
+    expect(mockClaudeCode.generatePlan).toHaveBeenCalledTimes(2);
+    // CODE_REVIEW に短縮されたプランが渡ること
+    const codeReviewPrompt = mockCodex.reviewCode.mock.calls[0][0] as string;
+    expect(codeReviewPrompt).toContain(shorterPlan);
+  });
+
+  it("プラン本文中に「変更点」を含むが先頭行でなければ全文と判定される", async () => {
+    const initialPlan = "A".repeat(100);
+    // 先頭行はパターン不一致、本文中に「変更点」あり
+    const fullPlanWithKeyword = "# 実装計画\n\n## 変更点の概要\n詳細...\n" + "B".repeat(100);
+
+    mockClaudeCode.generatePlan
+      .mockResolvedValueOnce({
+        response: initialPlan,
+        raw: { exitCode: 0, stdout: "", stderr: "" },
+      })
+      .mockResolvedValueOnce({
+        response: fullPlanWithKeyword,
+        raw: { exitCode: 0, stdout: "", stderr: "" },
+      });
+
+    mockCodex.reviewPlan.mockResolvedValue({
+      response: "OK",
+      raw: { exitCode: 0, stdout: "", stderr: "" },
+    });
+
+    mockJudgeReview
+      .mockResolvedValueOnce(makeJudgment(false))
+      .mockResolvedValueOnce(makeJudgment(false))
+      .mockResolvedValueOnce(makeJudgment(false));
+
+    mockUi.promptPlanApproval
+      .mockResolvedValueOnce({ action: "modify", instruction: "修正して" })
+      .mockResolvedValueOnce({ action: "approve" });
+
+    mockClaudeCode.generateCode.mockResolvedValue({
+      response: "Code",
+      raw: { exitCode: 0, stdout: "", stderr: "" },
+    });
+    mockCodex.reviewCode.mockResolvedValue({
+      response: "LGTM",
+      raw: { exitCode: 0, stdout: "", stderr: "" },
+    });
+
+    await runWorkflow(defaultOptions);
+
+    // リトライなし
+    expect(mockClaudeCode.generatePlan).toHaveBeenCalledTimes(2);
+    // 全文がそのまま採用
+    const codeReviewPrompt = mockCodex.reviewCode.mock.calls[0][0] as string;
+    expect(codeReviewPrompt).toContain(fullPlanWithKeyword);
+  });
+});
+
+describe("isDiffLikeResponse", () => {
+  it("長さ30%未満で差分と判定", () => {
+    expect(isDiffLikeResponse("短い", "A".repeat(100))).toBe(true);
+  });
+
+  it("先頭行が差分パターンに一致で差分と判定（長いレスポンスでも）", () => {
+    const longDiff = "変更点は2つです\n" + "A".repeat(200);
+    expect(isDiffLikeResponse(longDiff, "A".repeat(100))).toBe(true);
+  });
+
+  it("unified diff 形式 (@@単独) で差分と判定", () => {
+    const diff = "以下の変更を適用:\n@@ -1,3 +1,4 @@\n line1\n+added\n line2";
+    expect(isDiffLikeResponse(diff, "A".repeat(100))).toBe(true);
+  });
+
+  it("unified diff 形式 (---/+++ペア) で差分と判定", () => {
+    const diff = "--- a/file.ts\n+++ b/file.ts\nsome context";
+    expect(isDiffLikeResponse(diff, "A".repeat(100))).toBe(true);
+  });
+
+  it("fenced diff ブロックで差分と判定", () => {
+    const diff = "```diff\n-old line\n+new line\n```\n" + "A".repeat(200);
+    expect(isDiffLikeResponse(diff, "A".repeat(100))).toBe(true);
+  });
+
+  it("通常の箇条書き (-項目) は差分と誤検知しない", () => {
+    const plan = "# 計画\n- 項目1\n- 項目2\n- 項目3\n- 項目4\n" + "A".repeat(100);
+    expect(isDiffLikeResponse(plan, "A".repeat(100))).toBe(false);
+  });
+
+  it("全文出力は差分と判定しない", () => {
+    expect(isDiffLikeResponse("A".repeat(100), "A".repeat(100))).toBe(false);
+  });
+
+  it("正当な短縮プラン (30%以上、パターン不一致) は差分と判定しない", () => {
+    expect(isDiffLikeResponse("B".repeat(40), "A".repeat(100))).toBe(false);
+  });
+
+  it("本文中に「変更点」があっても先頭行でなければ全文と判定", () => {
+    const plan = "# 実装計画\n\n## 変更点の概要\n詳細...\n" + "A".repeat(100);
+    expect(isDiffLikeResponse(plan, "A".repeat(100))).toBe(false);
+  });
+
+  it("先頭行が「変更点の概要」のような見出しでは差分と判定しない", () => {
+    const plan = "変更点の概要を以下にまとめます\n" + "A".repeat(200);
+    expect(isDiffLikeResponse(plan, "A".repeat(100))).toBe(false);
+  });
+
+  it("basePlan が空なら常に false", () => {
+    expect(isDiffLikeResponse("何か", "")).toBe(false);
   });
 });

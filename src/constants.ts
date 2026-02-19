@@ -7,6 +7,17 @@ export const REPL_MESSAGES = {
 } as const;
 
 export const DEFAULT_TIMEOUT_MS = 30 * 60 * 1000; // 30 minutes
+
+const TRUNCATE_SEPARATOR = "\n...(中略)...\n";
+
+function truncateMiddle(text: string, maxLen: number): string {
+  if (text.length <= maxLen) return text;
+  const available = maxLen - TRUNCATE_SEPARATOR.length;
+  if (available <= 0) return text.slice(0, maxLen);
+  const headLen = Math.ceil(available / 2);
+  const tailLen = available - headLen;
+  return text.slice(0, headLen) + TRUNCATE_SEPARATOR + text.slice(-tailLen);
+}
 export const DEFAULT_MAX_PLAN_ITERATIONS = 10;
 export const DEFAULT_MAX_CODE_ITERATIONS = 10;
 export const BLOCKER_SEVERITIES = new Set(["P0", "P1", "P2", "P3"]);
@@ -15,16 +26,22 @@ export const PROMPTS = {
   PLAN_GENERATION: (userPrompt: string) =>
     `以下の要件に基づいて、実装計画を作成してください。コードは書かず、計画のみを出力してください。\n\n${userPrompt}`,
 
-  PLAN_REVISION: (concerns: string, userAnswers?: string) => {
-    let prompt = `以下のレビュー指摘事項に基づいて、計画を修正してください。コードは書かず、修正後の計画を最初から最後まで省略せずに全文出力してください。変更箇所の差分だけでなく、計画全体を出力してください。\n\n## レビュー指摘事項\n${concerns}`;
+  PLAN_REVISION: (currentPlan: string, concerns: string, userAnswers?: string) => {
+    let prompt = `以下のレビュー指摘事項に基づいて、計画を修正してください。コードは書かず、修正後の計画を最初から最後まで省略せずに全文出力してください。変更箇所の差分だけでなく、計画全体を出力してください。\n\n## 現在の計画\n${currentPlan}\n\n## レビュー指摘事項\n${concerns}`;
     if (userAnswers) {
       prompt += `\n\n## ユーザーからの回答\n${userAnswers}`;
     }
     return prompt;
   },
 
-  PLAN_USER_REVISION: (instruction: string) =>
-    `ユーザーから以下の修正指示がありました。指示に基づいて計画を修正してください。コードは書かず、修正後の計画を最初から最後まで省略せずに全文出力してください。変更箇所の差分だけでなく、計画全体を出力してください。\n\n## ユーザーの修正指示\n${instruction}`,
+  PLAN_USER_REVISION: (currentPlan: string, instruction: string) =>
+    `ユーザーから以下の修正指示がありました。指示に基づいて計画を修正してください。コードは書かず、修正後の計画を最初から最後まで省略せずに全文出力してください。変更箇所の差分だけでなく、計画全体を出力してください。\n\n## 現在の計画\n${currentPlan}\n\n## ユーザーの修正指示\n${instruction}`,
+
+  PLAN_FULLTEXT_RETRY: (lastKnownFullPlan: string, diffResponse: string, originalContext: string) => {
+    const trimmedDiff = truncateMiddle(diffResponse, 5000);
+    const trimmedContext = truncateMiddle(originalContext, 5000);
+    return `先ほどの出力は変更箇所のみでした。以下のベースとなる計画に、先ほど出力された修正内容を反映した全文を出力してください。差分や要約ではなく、修正を反映した計画全体をそのまま出力してください。\n\n## ベースとなる計画\n${lastKnownFullPlan}\n\n## 元の修正要求\n${trimmedContext}\n\n## 先ほどの修正出力\n${trimmedDiff}`;
+  },
 
   CODE_GENERATION: () =>
     `上記の計画に基づいて、コードを生成してください。計画に記載された内容をすべて実装してください。`,
