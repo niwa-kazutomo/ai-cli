@@ -109,6 +109,7 @@ export const MESSAGES = {
   UNRESOLVED_CONCERNS_FINISH: `未解消の懸念事項があります。このまま完了してよいですか？ (y/n): `,
   WORKFLOW_ABORTED: `ワークフローを中止しました。`,
   WORKFLOW_COMPLETE: `✅ コード生成が完了しました。`,
+  PLAN_ONLY_COMPLETE: `✅ プラン生成が完了しました。`,
   NO_GIT_REPO: `エラー: 現在のディレクトリは Git リポジトリ内ではありません。コードレビューには Git リポジトリが必要です。`,
   NO_GIT_CHANGES: `エラー: Git の変更が検出されませんでした。コードレビューには未コミットの変更が必要です。`,
 } as const;

@@ -357,6 +357,13 @@ export async function runWorkflow(options: OrchestratorOptions): Promise<void> {
     planReviewSummary = "";
   }
 
+  // ===== Plan Only =====
+  if (options.planOnly) {
+    ui.displaySeparator();
+    ui.display(MESSAGES.PLAN_ONLY_COMPLETE);
+    return;
+  }
+
   // ===== Code Phase =====
   ui.displaySeparator();
   ui.display("💻 Step 4: コード生成を開始します...");

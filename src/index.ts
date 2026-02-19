@@ -19,6 +19,7 @@ function buildWorkflowOptions(opts: Record<string, unknown>): ReplOptions {
     claudeModel: opts.claudeModel as string | undefined,
     codexModel: opts.codexModel as string | undefined,
     dangerous: Boolean(opts.dangerous),
+    planOnly: Boolean(opts.planOnly),
     verbose: Boolean(opts.verbose),
     debug: Boolean(opts.debug),
     cwd: String(opts.cwd),
@@ -37,6 +38,7 @@ export function formatActiveOptions(options: ReplOptions): string | null {
 
   if (options.debug) parts.push("--debug");
   if (options.verbose) parts.push("--verbose");
+  if (options.planOnly) parts.push("--plan-only");
   if (options.dangerous) parts.push("--dangerous");
   if (options.claudeModel !== undefined)
     parts.push(`--claude-model ${JSON.stringify(options.claudeModel)}`);
@@ -83,6 +85,10 @@ export function createProgram(): Command {
     )
     .option("--claude-model <model>", "Claude Code のモデル指定")
     .option("--codex-model <model>", "Codex のモデル指定")
+    .option(
+      "--plan-only",
+      "プラン生成・レビューのみ実行し、コード生成をスキップ",
+    )
     .option(
       "--dangerous",
       "コード生成時に --dangerously-skip-permissions を使用",

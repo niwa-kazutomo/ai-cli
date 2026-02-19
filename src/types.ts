@@ -52,6 +52,7 @@ export interface OrchestratorOptions {
   dangerous: boolean;
   verbose: boolean;
   debug: boolean;
+  planOnly: boolean;
   cwd: string;
 }
 
