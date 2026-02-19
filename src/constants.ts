@@ -6,7 +6,7 @@ export const REPL_MESSAGES = {
   NEXT_PROMPT: "次のプロンプトを入力してください。",
 } as const;
 
-export const DEFAULT_TIMEOUT_MS = 10 * 60 * 1000; // 10 minutes
+export const DEFAULT_TIMEOUT_MS = 30 * 60 * 1000; // 30 minutes
 export const DEFAULT_MAX_PLAN_ITERATIONS = 10;
 export const DEFAULT_MAX_CODE_ITERATIONS = 10;
 export const BLOCKER_SEVERITIES = new Set(["P0", "P1", "P2", "P3"]);
