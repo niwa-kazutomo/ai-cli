@@ -38,8 +38,17 @@ function buildSessionArgs(session: SessionState): string[] {
 export function extractSessionId(stdout: string): string | null {
   try {
     const parsed = JSON.parse(stdout);
-    if (typeof parsed === "object" && parsed !== null && typeof parsed.session_id === "string") {
+    // 単一オブジェクトの場合
+    if (!Array.isArray(parsed) && typeof parsed === "object" && parsed !== null && typeof parsed.session_id === "string") {
       return parsed.session_id;
+    }
+    // JSON 配列の場合（--output-format json は配列を返す）
+    if (Array.isArray(parsed)) {
+      for (const event of parsed) {
+        if (typeof event === "object" && event !== null && typeof event.session_id === "string") {
+          return event.session_id;
+        }
+      }
     }
   } catch {
     logger.debug("Claude Code の session_id 抽出: JSON パース失敗");
@@ -53,12 +62,38 @@ export function extractSessionId(stdout: string): string | null {
  */
 export function extractResponse(stdout: string): string {
   try {
-    const parsed = JSON.parse(stdout);
+    let parsed = JSON.parse(stdout);
+    // JSON 配列の場合（--output-format json は配列を返す）→ result イベントを探す
+    if (Array.isArray(parsed)) {
+      const resultEvent = parsed.find(
+        (e: Record<string, unknown>) => typeof e === "object" && e !== null && e.type === "result",
+      );
+      if (resultEvent) {
+        parsed = resultEvent;
+      } else {
+        // result イベントがなければ assistant メッセージから抽出
+        const assistantEvent = parsed.find(
+          (e: Record<string, unknown>) => typeof e === "object" && e !== null && e.type === "assistant",
+        );
+        if (assistantEvent) {
+          parsed = assistantEvent;
+        }
+      }
+    }
     // --output-format json の応答形式
     if (typeof parsed === "object" && parsed !== null) {
       // result フィールドがある場合
       if (typeof parsed.result === "string") {
         return parsed.result;
+      }
+      // message.content が配列の場合（assistant イベント）
+      if (typeof parsed.message === "object" && parsed.message !== null && Array.isArray(parsed.message.content)) {
+        return parsed.message.content
+          .filter(
+            (block: { type: string; text?: string }) => block.type === "text",
+          )
+          .map((block: { text: string }) => block.text)
+          .join("\n");
       }
       // content が配列の場合（会話形式）
       if (Array.isArray(parsed.content)) {
@@ -183,6 +218,8 @@ export async function generatePlan(
     "--print",
     "--output-format",
     "json",
+    "--permission-mode",
+    "acceptEdits",
     ...buildSessionArgs(session),
   ];
 
