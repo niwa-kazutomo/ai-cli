@@ -1330,6 +1330,35 @@ describe("orchestrator", () => {
     expect(codeReviewPrompt).toContain(shorterPlan);
   });
 
+  it("結語 suffix-only のプラン修正がリトライで全文に復帰する（抽出失敗→差分検知→全文再取得）", async () => {
+    const initialPlan = "# 計画\n## Step 1\n詳細...\n" + "A".repeat(200);
+    const suffixOnly = "以上が修正後の計画全文です。\nレビュー対応まとめ:\n| 指摘 | 対応 |";
+    const retryFull = initialPlan + "\n## 追加事項\n追加内容";
+
+    mockClaudeCode.generatePlan
+      .mockResolvedValueOnce({ response: initialPlan, raw: { exitCode: 0, stdout: "", stderr: "" } })
+      .mockResolvedValueOnce({ response: suffixOnly, raw: { exitCode: 0, stdout: "", stderr: "" } })
+      .mockResolvedValueOnce({ response: retryFull, raw: { exitCode: 0, stdout: "", stderr: "" } });
+
+    mockCodex.reviewPlan.mockResolvedValue({ response: "OK", raw: { exitCode: 0, stdout: "", stderr: "" } });
+    mockJudgeReview
+      .mockResolvedValueOnce(makeJudgment(false))
+      .mockResolvedValueOnce(makeJudgment(false))
+      .mockResolvedValueOnce(makeJudgment(false));
+    mockUi.promptPlanApproval
+      .mockResolvedValueOnce({ action: "modify", instruction: "追加事項を入れて" })
+      .mockResolvedValueOnce({ action: "approve" });
+    mockClaudeCode.generateCode.mockResolvedValue({ response: "Code", raw: { exitCode: 0, stdout: "", stderr: "" } });
+    mockCodex.reviewCode.mockResolvedValue({ response: "LGTM", raw: { exitCode: 0, stdout: "", stderr: "" } });
+
+    await runWorkflow(defaultOptions);
+
+    expect(mockClaudeCode.generatePlan).toHaveBeenCalledTimes(3);
+    expect(mockUi.display).toHaveBeenCalledWith(expect.stringContaining("差分出力を検知しました"));
+    const codeReviewPrompt = mockCodex.reviewCode.mock.calls[0][0] as string;
+    expect(codeReviewPrompt).toContain(retryFull);
+  });
+
   it("プラン本文中に「変更点」を含むが先頭行でなければ全文と判定される", async () => {
     const initialPlan = "A".repeat(100);
     // 先頭行はパターン不一致、本文中に「変更点」あり
@@ -1428,5 +1457,41 @@ describe("isDiffLikeResponse", () => {
 
   it("basePlan が空なら常に false", () => {
     expect(isDiffLikeResponse("何か", "")).toBe(false);
+  });
+
+  it("結語先頭パターン（「以上が修正後の...全文です」）で差分と判定", () => {
+    const suffix = "---\n\n以上が修正後の計画全文です。レビュー指摘への対応まとめ:\n" + "A".repeat(200);
+    expect(isDiffLikeResponse(suffix, "A".repeat(200))).toBe(true);
+  });
+
+  it("結語先頭パターン（「上記が反映...プラン全文」）で差分と判定", () => {
+    const suffix = "---\n上記が反映済みのプラン全文です。";
+    expect(isDiffLikeResponse(suffix, "A".repeat(200))).toBe(true);
+  });
+
+  it("結語先頭パターン（「以上が変更後...」）で差分と判定", () => {
+    const suffix = "以上が変更後の計画です。\nレビュー指摘への対応まとめ:";
+    expect(isDiffLikeResponse(suffix, "A".repeat(200))).toBe(true);
+  });
+
+  it("---で始まるが結語フレーズがない通常の計画は差分と判定しない", () => {
+    const plan = "---\n# Implementation Plan\nStep 1: Do something\n" + "A".repeat(200);
+    expect(isDiffLikeResponse(plan, "A".repeat(200))).toBe(false);
+  });
+
+  it("front matter (---のみ) の正当な計画を差分と判定しない", () => {
+    const plan = "---\ntitle: Plan\n---\n# 計画\n以上が" + "A".repeat(200);
+    // "以上が" は3行目以降にあるので最初の2行には含まれない
+    expect(isDiffLikeResponse(plan, "A".repeat(200))).toBe(false);
+  });
+
+  it("先頭に「以上が」を含むが結語語彙がない通常本文は差分と判定しない", () => {
+    const plan = "以上が前提条件です。以下に手順を示します。\n## Step 1\n" + "A".repeat(200);
+    expect(isDiffLikeResponse(plan, "A".repeat(200))).toBe(false);
+  });
+
+  it("先頭に「以上が計画の背景です」のような正当な本文冒頭は差分と判定しない", () => {
+    const plan = "以上が計画の背景です。以下に詳細を示します。\n## Step 1\n" + "A".repeat(200);
+    expect(isDiffLikeResponse(plan, "A".repeat(200))).toBe(false);
   });
 });

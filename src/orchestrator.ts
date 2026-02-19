@@ -24,6 +24,17 @@ export function isDiffLikeResponse(response: string, basePlan: string): boolean 
   const hasFencedDiff = lines.some(l => /^```\s*diff/i.test(l));
   if (hasHunkHeader || hasDiffHeader || hasFencedDiff) return true;
 
+  // 2.5. 結語先頭パターン（末尾セクションのみが返された場合のセーフティネット）
+  const meaningfulLines = lines
+    .map(l => l.trim())
+    .filter(l => l.length > 0 && !/^[-*_]{3,}$/.test(l))
+    .slice(0, 2);
+  const conclusionPatterns = [
+    /^以上が.*(?:修正後|反映|全文です|プラン全文|変更後|修正版|対応済み)/,
+    /^上記が.*(?:修正後|反映|全文です|プラン全文|変更後|修正版|対応済み)/,
+  ];
+  if (meaningfulLines.some(line => conclusionPatterns.some(p => p.test(line)))) return true;
+
   // 3. 長さが極端に短い (30%未満) → diff 判定
   if (response.length < basePlan.length * 0.3) return true;
 

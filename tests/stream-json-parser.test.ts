@@ -208,6 +208,114 @@ describe("extractFromStreamEvents", () => {
     expect(result.response).toBe("only text");
     expect(result.sessionId).toBeNull();
   });
+
+  it("複数 assistant メッセージグループ（非 assistant ギャップあり）を蓄積する", () => {
+    const events: StreamJsonEvent[] = [
+      { type: "system", session_id: "sess-multi" },
+      { type: "assistant", message: { content: [{ type: "text", text: "Part 1 start" }] } },
+      { type: "assistant", message: { content: [{ type: "text", text: "Part 1 full" }] } },
+      { type: "tool_result", tool_use_id: "t1", content: "file data" },
+      { type: "assistant", message: { content: [{ type: "text", text: "Part 2" }] } },
+    ];
+    const result = extractFromStreamEvents(events);
+    expect(result.response).toBe("Part 1 full\nPart 2");
+    expect(result.sessionId).toBe("sess-multi");
+  });
+
+  it("複数グループ + result イベントがあっても蓄積テキストを優先する", () => {
+    const events: StreamJsonEvent[] = [
+      { type: "system", session_id: "sess-pref" },
+      { type: "assistant", message: { content: [{ type: "text", text: "First msg" }] } },
+      { type: "tool_result", tool_use_id: "t1", content: "data" },
+      { type: "assistant", message: { content: [{ type: "text", text: "Second msg" }] } },
+      { type: "result", result: "Second msg", session_id: "sess-pref" },
+    ];
+    const result = extractFromStreamEvents(events);
+    expect(result.response).toBe("First msg\nSecond msg");
+  });
+
+  it("単一グループ（累積イベント）+ result では result を優先する（後方互換）", () => {
+    const events: StreamJsonEvent[] = [
+      { type: "system", session_id: "sess-single" },
+      { type: "assistant", message: { content: [{ type: "text", text: "Hello" }] } },
+      { type: "assistant", message: { content: [{ type: "text", text: "Hello World" }] } },
+      { type: "result", result: "Hello World Complete", session_id: "sess-single" },
+    ];
+    const result = extractFromStreamEvents(events);
+    expect(result.response).toBe("Hello World Complete");
+  });
+
+  it("3つ以上のグループを正しく蓄積する", () => {
+    const events: StreamJsonEvent[] = [
+      { type: "system", session_id: "sess-3g" },
+      { type: "assistant", message: { content: [{ type: "text", text: "G1" }] } },
+      { type: "tool_result", tool_use_id: "t1", content: "" },
+      { type: "assistant", message: { content: [{ type: "text", text: "G2" }] } },
+      { type: "tool_result", tool_use_id: "t2", content: "" },
+      { type: "assistant", message: { content: [{ type: "text", text: "G3" }] } },
+      { type: "result", result: "G3", session_id: "sess-3g" },
+    ];
+    const result = extractFromStreamEvents(events);
+    expect(result.response).toBe("G1\nG2\nG3");
+  });
+
+  it("単一メッセージ内のテキスト縮退は別グループにならない", () => {
+    const events: StreamJsonEvent[] = [
+      { type: "system", session_id: "sess-shrink" },
+      { type: "assistant", message: { content: [{ type: "text", text: "Draft v1 long text" }] } },
+      { type: "assistant", message: { content: [{ type: "text", text: "Final short" }] } },
+      { type: "result", result: "Final short", session_id: "sess-shrink" },
+    ];
+    const result = extractFromStreamEvents(events);
+    expect(result.response).toBe("Final short");
+  });
+
+  it("複数 result イベントがある場合は末尾の result を優先する", () => {
+    const events: StreamJsonEvent[] = [
+      { type: "system", session_id: "sess-old" },
+      { type: "result", result: "old result", session_id: "sess-old" },
+      { type: "assistant", message: { content: [{ type: "text", text: "new text" }] } },
+      { type: "result", result: "new result", session_id: "sess-new" },
+    ];
+    const result = extractFromStreamEvents(events);
+    expect(result.response).toBe("new result");
+    expect(result.sessionId).toBe("sess-new");
+  });
+
+  it("未知イベントが assistant 間に挟まっても分割しない（既知の制限の文書化）", () => {
+    const fullPlan = "# Full Plan\n## Step 1\nDo X\n## Step 2\nDo Y";
+    const suffix = "以上が修正後の計画全文です。";
+    const events: StreamJsonEvent[] = [
+      { type: "system", session_id: "sess-unknown" },
+      { type: "assistant", message: { content: [{ type: "text", text: fullPlan }] } },
+      { type: "unknown_boundary", some_data: "something" },
+      { type: "assistant", message: { content: [{ type: "text", text: suffix }] } },
+      { type: "result", result: suffix, session_id: "sess-unknown" },
+    ];
+    const result = extractFromStreamEvents(events);
+    expect(result.response).toBe(suffix);
+  });
+
+  it("実ストリーム相当の fixture: tool_result を挟んだ複数メッセージが正しく蓄積される", () => {
+    const events: StreamJsonEvent[] = [
+      { type: "system", session_id: "sess-fixture", subtype: "init" },
+      { type: "assistant", message: { content: [{ type: "text", text: "# 実装計画" }] } },
+      { type: "assistant", message: { content: [{ type: "text", text: "# 実装計画\n## 1. 概要" }] } },
+      { type: "assistant", message: { content: [
+        { type: "text", text: "# 実装計画\n## 1. 概要\n手順を示す。" },
+        { type: "tool_use", id: "tu_1", name: "Read", input: { file_path: "/src/app.ts" } },
+      ] } },
+      { type: "tool_result", tool_use_id: "tu_1", content: "export function main() {}" },
+      { type: "assistant", message: { content: [{ type: "text", text: "以上が計画の全文です。" }] } },
+      { type: "result", result: "以上が計画の全文です。", session_id: "sess-fixture" },
+    ];
+    const result = extractFromStreamEvents(events);
+    expect(result.response).toBe("# 実装計画\n## 1. 概要\n手順を示す。\n以上が計画の全文です。");
+    expect(result.sessionId).toBe("sess-fixture");
+    const idx1 = result.response.indexOf("# 実装計画");
+    const idx2 = result.response.indexOf("以上が計画の全文です。");
+    expect(idx1).toBeLessThan(idx2);
+  });
 });
 
 describe("extractTextFromCodexEvent", () => {

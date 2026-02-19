@@ -147,42 +147,88 @@ export function extractFromCodexStreamEvents(events: StreamJsonEvent[]): StreamJ
   return { response: texts.join("\n"), sessionId };
 }
 
+/** メッセージ境界になりうるイベント型 */
+const MESSAGE_BOUNDARY_TYPES = new Set(["tool_result", "user"]);
+
+/**
+ * assistant イベント列から全テキストを蓄積する。
+ * メッセージ境界は MESSAGE_BOUNDARY_TYPES に該当するイベントの介在で判定。
+ * 同一メッセージ内の累積更新では最終値のみを採用する。
+ */
+function accumulateAssistantTexts(
+  events: StreamJsonEvent[],
+): { text: string; groupCount: number } {
+  const groups: string[] = [];
+  let currentText = "";
+  let hasMessageBoundary = false;
+
+  for (const event of events) {
+    const text = extractTextFromEvent(event);
+    if (text !== null) {
+      if (hasMessageBoundary && currentText !== "") {
+        // メッセージ境界イベントを挟んだ → 新メッセージグループ
+        groups.push(currentText);
+        currentText = text;
+        hasMessageBoundary = false;
+      } else {
+        // 同一メッセージ内の累積更新 → 最終値を採用
+        currentText = text;
+      }
+    } else if (
+      currentText !== "" &&
+      typeof event.type === "string" &&
+      MESSAGE_BOUNDARY_TYPES.has(event.type)
+    ) {
+      // メッセージ境界イベント → 境界フラグを立てる
+      hasMessageBoundary = true;
+    }
+  }
+  if (currentText !== "") {
+    groups.push(currentText);
+  }
+  return { text: groups.join("\n"), groupCount: groups.length };
+}
+
 /**
  * イベント列から response と sessionId を抽出する。
- * - result イベントの result フィールドを優先
- * - result イベントがない場合: 最後の assistant イベントからテキストを取得
+ * - 複数 assistant メッセージグループがある場合: 蓄積テキストを使用
+ * - 単一グループ + result: result を優先（後方互換・縮退安全）
+ * - result なし: 蓄積テキストにフォールバック
  * - session_id は system イベントまたは result イベントから取得
  */
 export function extractFromStreamEvents(events: StreamJsonEvent[]): StreamJsonResult {
-  let response = "";
   let sessionId: string | null = null;
 
-  // session_id を system または result イベントから探す
   for (const event of events) {
     if (event.type === "system" && typeof event.session_id === "string") {
       sessionId = event.session_id;
     }
   }
 
-  // result イベントを探す
-  const resultEvent = events.find((e) => e.type === "result");
-  if (resultEvent) {
-    if (typeof resultEvent.result === "string") {
-      response = resultEvent.result;
-    }
-    if (typeof resultEvent.session_id === "string") {
-      sessionId = resultEvent.session_id;
-    }
-    return { response, sessionId };
-  }
-
-  // result イベントがない場合: 最後の assistant イベントからテキストを取得
+  // result イベントは複数混入しうるため末尾優先（findLast 相当）
+  let resultEvent: StreamJsonEvent | undefined;
   for (let i = events.length - 1; i >= 0; i--) {
-    const text = extractTextFromEvent(events[i]);
-    if (text !== null) {
-      response = text;
+    if (events[i].type === "result") {
+      resultEvent = events[i];
       break;
     }
+  }
+  if (resultEvent && typeof resultEvent.session_id === "string") {
+    sessionId = resultEvent.session_id;
+  }
+
+  const accumulated = accumulateAssistantTexts(events);
+  let response: string;
+
+  if (accumulated.groupCount > 1) {
+    // 明確な複数メッセージ: result は最後のメッセージのみなので蓄積テキストを使用
+    response = accumulated.text;
+  } else if (resultEvent && typeof resultEvent.result === "string") {
+    // 単一メッセージ + result: result を優先（後方互換・縮退安全）
+    response = resultEvent.result;
+  } else {
+    // result なし: 蓄積テキストにフォールバック
+    response = accumulated.text;
   }
 
   return { response, sessionId };

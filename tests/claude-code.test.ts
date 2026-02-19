@@ -458,6 +458,35 @@ describe("ストリーミングモード", () => {
     expect(receivedChunks).toEqual(["Before", "\n", "After", "\n"]);
   });
 
+  it("複数 assistant メッセージ（ツール実行挟み）で全メッセージが response に蓄積される", async () => {
+    runCliMock.mockImplementation((_cmd: string, opts: { args: string[]; onStdout?: (chunk: string) => void }) => {
+      const events = [
+        '{"type":"system","session_id":"sess-multi-msg"}\n',
+        '{"type":"assistant","message":{"content":[{"type":"text","text":"# Full Plan\\nStep 1: Do X"}]}}\n',
+        '{"type":"tool_result","tool_use_id":"t1","content":"file content"}\n',
+        '{"type":"assistant","message":{"content":[{"type":"text","text":"以上が修正後の計画全文です。"}]}}\n',
+        '{"type":"result","result":"以上が修正後の計画全文です。","session_id":"sess-multi-msg"}\n',
+      ];
+      for (const event of events) {
+        opts.onStdout?.(event);
+      }
+      return Promise.resolve({ exitCode: 0, stdout: "", stderr: "" });
+    });
+
+    const { generatePlan } = await import("../src/claude-code.js");
+    const session = { claudeSessionId: null, claudeFirstRun: true, codexSessionId: null, codexFirstRun: true };
+
+    const result = await generatePlan(session, "test", { cwd: "/tmp", streaming: true });
+
+    expect(result.response).toContain("# Full Plan");
+    expect(result.response).toContain("Step 1: Do X");
+    expect(result.response).toContain("以上が修正後の計画全文です。");
+
+    const planIdx = result.response.indexOf("# Full Plan");
+    const summaryIdx = result.response.indexOf("以上が修正後の計画全文です。");
+    expect(planIdx).toBeLessThan(summaryIdx);
+  });
+
   it("streaming: false で json 経路が正常動作する（クラッシュしない）", async () => {
     runCliMock.mockResolvedValue({
       exitCode: 0,
