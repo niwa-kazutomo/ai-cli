@@ -14,6 +14,17 @@ function createMockOutput(): PassThrough & { columns?: number } {
   return stream as PassThrough & { columns?: number };
 }
 
+function captureWrites(output: PassThrough & { columns?: number }): { getOutput: () => string } {
+  const parts: string[] = [];
+  const origWrite = output.write.bind(output);
+  output.write = ((chunk: any, ...args: any[]) => {
+    if (typeof chunk === "string") parts.push(chunk);
+    else if (Buffer.isBuffer(chunk)) parts.push(chunk.toString());
+    return origWrite(chunk, ...args);
+  }) as any;
+  return { getOutput: () => parts.join("") };
+}
+
 function makeOptions(
   input: ReturnType<typeof createMockInput>,
   output: ReturnType<typeof createMockOutput>,
@@ -360,5 +371,197 @@ describe("readLine", () => {
     input.write("ab\x1b[D\x1b[DX\x1b[CY\r");
     const result = await promise;
     expect(result).toEqual({ type: "input", value: "XaYb" });
+  });
+});
+
+describe("wrapping: column boundary", () => {
+  let input: ReturnType<typeof createMockInput>;
+  let output: ReturnType<typeof createMockOutput>;
+
+  beforeEach(() => {
+    input = createMockInput();
+    output = createMockOutput();
+  });
+
+  it("cols-1: cursor at one char before boundary", async () => {
+    output.columns = 10;
+    const capture = captureWrites(output);
+    const promise = readLine(makeOptions(input, output));
+    // "ai> " (4) + "abcde" (5) = 9 < 10 → 1 visual row, cursor at col 9
+    input.write("abcde\r");
+    const result = await promise;
+    expect(result).toEqual({ type: "input", value: "abcde" });
+    const allOutput = capture.getOutput();
+    const beforeEnter = allOutput.slice(0, allOutput.lastIndexOf("\n"));
+    expect(beforeEnter).toMatch(/\r\x1b\[9C$/);
+  });
+
+  it("cols: cursor at exact boundary (deferred wrap)", async () => {
+    output.columns = 10;
+    const capture = captureWrites(output);
+    const promise = readLine(makeOptions(input, output));
+    // "ai> " (4) + "abcdef" (6) = 10 = cols → deferred wrap
+    input.write("abcdef\r");
+    const result = await promise;
+    expect(result).toEqual({ type: "input", value: "abcdef" });
+    const allOutput = capture.getOutput();
+    const beforeEnter = allOutput.slice(0, allOutput.lastIndexOf("\n"));
+    // Cursor at col 10 (deferred wrap, clamped to right edge)
+    expect(beforeEnter).toMatch(/\r\x1b\[10C$/);
+    // No unnecessary vertical movement in the last render
+    const lastContentIdx = allOutput.lastIndexOf("ai> abcdef");
+    const afterContent = allOutput.slice(
+      lastContentIdx + "ai> abcdef".length,
+      allOutput.lastIndexOf("\n"),
+    );
+    expect(afterContent).not.toMatch(/\x1b\[\d+A/);
+    expect(afterContent).not.toMatch(/\x1b\[\d+B/);
+  });
+
+  it("cols+1: cursor one char past boundary", async () => {
+    output.columns = 10;
+    const capture = captureWrites(output);
+    const promise = readLine(makeOptions(input, output));
+    // "ai> " (4) + "abcdefg" (7) = 11 > 10 → 2 visual rows, cursor at col 1 of row 1
+    input.write("abcdefg\r");
+    const result = await promise;
+    expect(result).toEqual({ type: "input", value: "abcdefg" });
+    const allOutput = capture.getOutput();
+    const beforeEnter = allOutput.slice(0, allOutput.lastIndexOf("\n"));
+    expect(beforeEnter).toMatch(/\r\x1b\[1C$/);
+  });
+});
+
+describe("readLine cleanup: resize listener", () => {
+  it("resize listener removed after completion", async () => {
+    const input = createMockInput();
+    const output = createMockOutput();
+    const promise = readLine(makeOptions(input, output));
+    expect(output.listenerCount("resize")).toBe(1);
+    input.write("test\r");
+    await promise;
+    expect(output.listenerCount("resize")).toBe(0);
+  });
+});
+
+describe("wrapping: continuation prompt", () => {
+  it("wrapping on continuation line with different prompt width", async () => {
+    const input = createMockInput();
+    const output = createMockOutput();
+    output.columns = 15;
+    const capture = captureWrites(output);
+    const promise = readLine(makeOptions(input, output));
+    // Line 1: "ai> short" = 9 chars (no wrap)
+    // Ctrl+J for new line
+    // Line 2: "... " (4) + "abcdefghijk" (11) = 15 → exact boundary
+    input.write("short\x0aabcdefghijk\r");
+    const result = await promise;
+    expect(result).toEqual({ type: "input", value: "short\nabcdefghijk" });
+    const allOutput = capture.getOutput();
+    const beforeEnter = allOutput.slice(0, allOutput.lastIndexOf("\n"));
+    // Cursor at col 15 (deferred wrap on continuation line)
+    expect(beforeEnter).toMatch(/\r\x1b\[15C$/);
+  });
+});
+
+describe("getTerminalColumns fallback", () => {
+  let input: ReturnType<typeof createMockInput>;
+  let output: ReturnType<typeof createMockOutput>;
+
+  beforeEach(() => {
+    input = createMockInput();
+    output = createMockOutput();
+  });
+
+  it("undefined columns falls back to 80", async () => {
+    // output.columns is undefined by default
+    const capture = captureWrites(output);
+    const promise = readLine(makeOptions(input, output));
+    // prompt(4) + 76 chars = 80 → exact boundary at 80 cols
+    input.write("a".repeat(76) + "\r");
+    const result = await promise;
+    expect(result).toEqual({ type: "input", value: "a".repeat(76) });
+    const allOutput = capture.getOutput();
+    const beforeEnter = allOutput.slice(0, allOutput.lastIndexOf("\n"));
+    expect(beforeEnter).toMatch(/\r\x1b\[80C$/);
+  });
+
+  it("columns = 0 falls back to 80", async () => {
+    output.columns = 0;
+    const capture = captureWrites(output);
+    const promise = readLine(makeOptions(input, output));
+    input.write("a".repeat(76) + "\r");
+    const result = await promise;
+    expect(result).toEqual({ type: "input", value: "a".repeat(76) });
+    const allOutput = capture.getOutput();
+    const beforeEnter = allOutput.slice(0, allOutput.lastIndexOf("\n"));
+    expect(beforeEnter).toMatch(/\r\x1b\[80C$/);
+  });
+
+  it("columns = -1 falls back to 80", async () => {
+    output.columns = -1;
+    const capture = captureWrites(output);
+    const promise = readLine(makeOptions(input, output));
+    input.write("a".repeat(76) + "\r");
+    const result = await promise;
+    expect(result).toEqual({ type: "input", value: "a".repeat(76) });
+    const allOutput = capture.getOutput();
+    const beforeEnter = allOutput.slice(0, allOutput.lastIndexOf("\n"));
+    expect(beforeEnter).toMatch(/\r\x1b\[80C$/);
+  });
+});
+
+describe("wrapping: CJK characters", () => {
+  let input: ReturnType<typeof createMockInput>;
+  let output: ReturnType<typeof createMockOutput>;
+
+  beforeEach(() => {
+    input = createMockInput();
+    output = createMockOutput();
+  });
+
+  it("CJK at exact terminal width boundary", async () => {
+    output.columns = 10;
+    const capture = captureWrites(output);
+    const promise = readLine(makeOptions(input, output));
+    // "ai> " (4) + "日本語" (6, each width 2) = 10 → exact boundary
+    input.write("日本語\r");
+    const result = await promise;
+    expect(result).toEqual({ type: "input", value: "日本語" });
+    const allOutput = capture.getOutput();
+    const beforeEnter = allOutput.slice(0, allOutput.lastIndexOf("\n"));
+    expect(beforeEnter).toMatch(/\r\x1b\[10C$/);
+  });
+
+  it("CJK wrapping past terminal width", async () => {
+    output.columns = 10;
+    const capture = captureWrites(output);
+    const promise = readLine(makeOptions(input, output));
+    // "ai> " (4) + "日本語テ" (8) = 12 → wraps to 2 visual rows
+    input.write("日本語テ\r");
+    const result = await promise;
+    expect(result).toEqual({ type: "input", value: "日本語テ" });
+    const allOutput = capture.getOutput();
+    const beforeEnter = allOutput.slice(0, allOutput.lastIndexOf("\n"));
+    // Cursor at col 2 of visual row 1 (12 % 10 = 2)
+    expect(beforeEnter).toMatch(/\r\x1b\[2C$/);
+  });
+});
+
+describe("resize handling", () => {
+  it("resize event triggers re-render", async () => {
+    const input = createMockInput();
+    const output = createMockOutput();
+    output.columns = 40;
+    const promise = readLine(makeOptions(input, output));
+    input.write("a".repeat(30));
+    await new Promise((r) => setTimeout(r, 10));
+    // Resize to smaller terminal
+    output.columns = 20;
+    output.emit("resize");
+    await new Promise((r) => setTimeout(r, 10));
+    input.write("\r");
+    const result = await promise;
+    expect(result).toEqual({ type: "input", value: "a".repeat(30) });
   });
 });

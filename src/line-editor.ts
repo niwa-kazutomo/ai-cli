@@ -89,8 +89,17 @@ export function readLine(options: LineEditorOptions): Promise<LineEditorResult> 
     const decoder = new StringDecoder("utf8");
     let resolved = false;
 
+    function onResize(): void {
+      if (!resolved) {
+        try { render(); } catch { /* ignore */ }
+      }
+    }
+
     function cleanup(): void {
       input.removeListener("data", onData);
+      if (typeof (output as any).removeListener === "function") {
+        (output as any).removeListener("resize", onResize);
+      }
       try {
         input.setRawMode?.(false);
       } catch {
@@ -114,61 +123,111 @@ export function readLine(options: LineEditorOptions): Promise<LineEditorResult> 
       return row === 0 ? prompt : continuationPrompt;
     }
 
-    function render(): void {
-      // Move cursor to beginning of the first line of our edit area
-      // First, move up to row 0
-      if (state.cursorRow > 0 || state.lines.length > 1) {
-        // We need to know where the terminal cursor currently is.
-        // We track this by always knowing which row we last rendered to.
+    function getTerminalColumns(): number {
+      const cols = (output as any).columns;
+      return typeof cols === "number" && cols > 0 ? cols : 80;
+    }
+
+    function getVisualRowCount(lineIndex: number): number {
+      const p = getPromptForRow(lineIndex);
+      const lineWidth = getDisplayWidth(p) + getDisplayWidth(state.lines[lineIndex]);
+      const cols = getTerminalColumns();
+      if (lineWidth <= 0) return 1;
+      return Math.ceil(lineWidth / cols);
+    }
+
+    function getTotalVisualRows(): number {
+      let total = 0;
+      for (let i = 0; i < state.lines.length; i++) {
+        total += getVisualRowCount(i);
       }
+      return total;
+    }
 
-      // Strategy: move cursor to start of first line, clear everything, redraw all lines
-      const totalLines = state.lines.length;
+    function getVisualRowOffset(logicalRow: number): number {
+      let offset = 0;
+      for (let i = 0; i < logicalRow; i++) {
+        offset += getVisualRowCount(i);
+      }
+      return offset;
+    }
 
-      // Move cursor up to first line from current render position
-      if (renderRow > 0) {
-        output.write(`\x1b[${renderRow}A`);
+    function render(): void {
+      const cols = getTerminalColumns();
+      const totalVisualRows = getTotalVisualRows();
+      const maxVisualRows = Math.max(totalVisualRows, prevVisualRowCount);
+
+      // Step 1: Move to the top of the edit area
+      if (renderVisualRow > 0) {
+        output.write(`\x1b[${renderVisualRow}A`);
       }
       output.write("\r");
 
-      // Draw all lines
-      for (let i = 0; i < totalLines; i++) {
+      // Step 2: Clear all visual rows
+      for (let v = 0; v < maxVisualRows; v++) {
+        output.write("\x1b[2K");
+        if (v < maxVisualRows - 1) {
+          output.write("\n");
+        }
+      }
+      if (maxVisualRows > 1) {
+        output.write(`\x1b[${maxVisualRows - 1}A`);
+      }
+      output.write("\r");
+
+      // Step 3: Write content (terminal handles auto-wrapping)
+      for (let i = 0; i < state.lines.length; i++) {
         const p = getPromptForRow(i);
-        output.write(`\x1b[2K${p}${state.lines[i]}`);
-        if (i < totalLines - 1) {
+        output.write(p + state.lines[i]);
+        if (i < state.lines.length - 1) {
           output.write("\n");
         }
       }
 
-      // Clear any leftover lines from previous render
-      if (totalLines < prevLineCount) {
-        for (let i = totalLines; i < prevLineCount; i++) {
-          output.write("\n\x1b[2K");
-        }
-        // Move back up
-        const extra = prevLineCount - totalLines;
-        if (extra > 0) {
-          output.write(`\x1b[${extra}A`);
-        }
-      }
-      prevLineCount = totalLines;
-
-      // Position cursor at correct location
-      // Currently at end of last line, need to move to state.cursorRow, state.cursorCol
-      const rowsUp = totalLines - 1 - state.cursorRow;
-      if (rowsUp > 0) {
-        output.write(`\x1b[${rowsUp}A`);
-      }
+      // Step 4: Position cursor (accounting for visual rows + column boundary)
       const cursorPrompt = getPromptForRow(state.cursorRow);
-      const displayCol = getDisplayWidth(cursorPrompt) + getDisplayWidth(state.lines[state.cursorRow].slice(0, state.cursorCol));
-      output.write(`\r\x1b[${displayCol}C`);
+      const cursorDisplayCol =
+        getDisplayWidth(cursorPrompt) +
+        getDisplayWidth(state.lines[state.cursorRow].slice(0, state.cursorCol));
 
-      renderRow = state.cursorRow;
+      let cursorVisualRowInLine: number;
+      let cursorColInVisualRow: number;
+
+      if (cursorDisplayCol > 0 && cursorDisplayCol % cols === 0) {
+        // Exact column boundary (deferred wrap position)
+        // Treat as end of previous visual row
+        cursorVisualRowInLine = (cursorDisplayCol / cols) - 1;
+        cursorColInVisualRow = cols;
+      } else {
+        cursorVisualRowInLine = Math.floor(cursorDisplayCol / cols);
+        cursorColInVisualRow = cursorDisplayCol % cols;
+      }
+
+      const cursorAbsoluteVisualRow =
+        getVisualRowOffset(state.cursorRow) + cursorVisualRowInLine;
+
+      // After writing, cursor is at the end of the last logical line.
+      // With deferred wrap, cursor stays on totalVisualRows - 1.
+      const currentVisualRow = totalVisualRows - 1;
+      const rowDelta = currentVisualRow - cursorAbsoluteVisualRow;
+      if (rowDelta > 0) {
+        output.write(`\x1b[${rowDelta}A`);
+      } else if (rowDelta < 0) {
+        output.write(`\x1b[${-rowDelta}B`);
+      }
+      output.write("\r");
+      if (cursorColInVisualRow > 0) {
+        output.write(`\x1b[${cursorColInVisualRow}C`);
+      }
+
+      // Step 5: Update tracking state
+      renderVisualRow = cursorAbsoluteVisualRow;
+      prevVisualRowCount = totalVisualRows;
     }
 
     // Track rendering state
-    let renderRow = 0;
-    let prevLineCount = 1;
+    let renderVisualRow = 0;
+    let prevVisualRowCount = 1;
 
     function insertText(text: string): void {
       // Split text by newlines for paste support
@@ -528,6 +587,9 @@ export function readLine(options: LineEditorOptions): Promise<LineEditorResult> 
     }
 
     input.on("data", onData);
+    if (typeof (output as any).on === "function") {
+      (output as any).on("resize", onResize);
+    }
     // readline.close() may leave stdin explicitly paused; resume() is safe/idempotent.
     input.resume();
 
