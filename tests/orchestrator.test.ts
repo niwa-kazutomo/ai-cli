@@ -26,6 +26,7 @@ vi.mock("../src/review-judge.js", () => ({
 
 vi.mock("../src/user-interaction.js", () => ({
   confirmYesNo: vi.fn(),
+  promptPlanApproval: vi.fn(),
   askQuestions: vi.fn().mockResolvedValue(""),
   display: vi.fn(),
   displaySeparator: vi.fn(),
@@ -100,7 +101,7 @@ describe("orchestrator", () => {
     mockJudgeReview.mockResolvedValue(makeJudgment(false));
 
     // User approvals
-    mockUi.confirmYesNo.mockResolvedValue(true);
+    mockUi.promptPlanApproval.mockResolvedValue({ action: "approve" });
 
     // Code generation
     mockClaudeCode.generateCode.mockResolvedValue({
@@ -136,8 +137,8 @@ describe("orchestrator", () => {
 
     mockJudgeReview.mockResolvedValue(makeJudgment(false));
 
-    // User rejects plan
-    mockUi.confirmYesNo.mockResolvedValue(false);
+    // User aborts plan
+    mockUi.promptPlanApproval.mockResolvedValue({ action: "abort" });
 
     await runWorkflow(defaultOptions);
 
@@ -199,7 +200,7 @@ describe("orchestrator", () => {
       // code review: no concerns
       .mockResolvedValueOnce(makeJudgment(false));
 
-    mockUi.confirmYesNo.mockResolvedValue(true);
+    mockUi.promptPlanApproval.mockResolvedValue({ action: "approve" });
 
     mockClaudeCode.generateCode.mockResolvedValue({
       response: "Code",
@@ -246,7 +247,7 @@ describe("orchestrator", () => {
       // code review: no concerns
       .mockResolvedValueOnce(makeJudgment(false));
 
-    mockUi.confirmYesNo.mockResolvedValue(true);
+    mockUi.promptPlanApproval.mockResolvedValue({ action: "approve" });
 
     mockClaudeCode.generateCode.mockResolvedValue({
       response: "Code",
@@ -333,7 +334,7 @@ describe("orchestrator", () => {
     });
 
     mockJudgeReview.mockResolvedValue(makeJudgment(false));
-    mockUi.confirmYesNo.mockResolvedValue(true);
+    mockUi.promptPlanApproval.mockResolvedValue({ action: "approve" });
 
     mockClaudeCode.generateCode.mockResolvedValue({
       response: "Code",
@@ -359,7 +360,7 @@ describe("orchestrator", () => {
       raw: { exitCode: 0, stdout: "", stderr: "" },
     });
     mockJudgeReview.mockResolvedValue(makeJudgment(false));
-    mockUi.confirmYesNo.mockResolvedValue(true);
+    mockUi.promptPlanApproval.mockResolvedValue({ action: "approve" });
     mockClaudeCode.generateCode.mockResolvedValue({
       response: "Generated code",
       raw: { exitCode: 0, stdout: "", stderr: "" },
@@ -392,7 +393,7 @@ describe("orchestrator", () => {
       raw: { exitCode: 0, stdout: "", stderr: "" },
     });
     mockJudgeReview.mockResolvedValue(makeJudgment(false));
-    mockUi.confirmYesNo.mockResolvedValue(true);
+    mockUi.promptPlanApproval.mockResolvedValue({ action: "approve" });
     mockClaudeCode.generateCode.mockResolvedValue({
       response: "Generated code",
       raw: { exitCode: 0, stdout: "", stderr: "" },
@@ -427,7 +428,7 @@ describe("orchestrator", () => {
       raw: { exitCode: 0, stdout: "", stderr: "" },
     });
     mockJudgeReview.mockResolvedValue(makeJudgment(false));
-    mockUi.confirmYesNo.mockResolvedValue(true);
+    mockUi.promptPlanApproval.mockResolvedValue({ action: "approve" });
     mockClaudeCode.generateCode.mockResolvedValue({
       response: "Generated code",
       raw: { exitCode: 0, stdout: "", stderr: "" },
@@ -463,7 +464,7 @@ describe("orchestrator", () => {
       raw: { exitCode: 0, stdout: "", stderr: "" },
     });
     mockJudgeReview.mockResolvedValue(makeJudgment(false));
-    mockUi.confirmYesNo.mockResolvedValue(true);
+    mockUi.promptPlanApproval.mockResolvedValue({ action: "approve" });
     mockClaudeCode.generateCode.mockResolvedValue({
       response: "Generated code",
       raw: { exitCode: 0, stdout: "", stderr: "" },
@@ -506,7 +507,7 @@ describe("orchestrator", () => {
       raw: { exitCode: 0, stdout: "", stderr: "" },
     });
     mockJudgeReview.mockResolvedValue(makeJudgment(false));
-    mockUi.confirmYesNo.mockResolvedValue(true);
+    mockUi.promptPlanApproval.mockResolvedValue({ action: "approve" });
     mockClaudeCode.generateCode.mockResolvedValue({
       response: "Generated code",
       raw: { exitCode: 0, stdout: "", stderr: "" },
@@ -534,7 +535,7 @@ describe("orchestrator", () => {
       raw: { exitCode: 0, stdout: "", stderr: "" },
     });
     mockJudgeReview.mockResolvedValue(makeJudgment(false));
-    mockUi.confirmYesNo.mockResolvedValue(true);
+    mockUi.promptPlanApproval.mockResolvedValue({ action: "approve" });
     mockClaudeCode.generateCode.mockResolvedValue({
       response: "Generated code",
       raw: { exitCode: 0, stdout: "", stderr: "" },
@@ -568,7 +569,7 @@ describe("orchestrator", () => {
       raw: { exitCode: 0, stdout: "", stderr: "" },
     });
     mockJudgeReview.mockResolvedValue(makeJudgment(false));
-    mockUi.confirmYesNo.mockResolvedValue(true);
+    mockUi.promptPlanApproval.mockResolvedValue({ action: "approve" });
     mockClaudeCode.generateCode.mockResolvedValue({
       response: "Generated code",
       raw: { exitCode: 0, stdout: "", stderr: "" },
@@ -600,7 +601,7 @@ describe("orchestrator", () => {
       raw: { exitCode: 0, stdout: "", stderr: "" },
     });
     mockJudgeReview.mockResolvedValue(makeJudgment(false));
-    mockUi.confirmYesNo.mockResolvedValue(true);
+    mockUi.promptPlanApproval.mockResolvedValue({ action: "approve" });
     mockClaudeCode.generateCode.mockResolvedValue({
       response: "Generated code",
       raw: { exitCode: 0, stdout: "", stderr: "" },
@@ -633,7 +634,7 @@ describe("orchestrator", () => {
       raw: { exitCode: 0, stdout: "", stderr: "" },
     });
     mockJudgeReview.mockResolvedValue(makeJudgment(false));
-    mockUi.confirmYesNo.mockResolvedValue(true);
+    mockUi.promptPlanApproval.mockResolvedValue({ action: "approve" });
     mockClaudeCode.generateCode.mockResolvedValue({
       response: "Code",
       raw: { exitCode: 0, stdout: "", stderr: "" },
@@ -664,7 +665,7 @@ describe("orchestrator", () => {
       raw: { exitCode: 0, stdout: "", stderr: "" },
     });
     mockJudgeReview.mockResolvedValue(makeJudgment(false));
-    mockUi.confirmYesNo.mockResolvedValue(true);
+    mockUi.promptPlanApproval.mockResolvedValue({ action: "approve" });
     mockClaudeCode.generateCode.mockResolvedValue({
       response: "Generated code",
       raw: { exitCode: 0, stdout: "", stderr: "" },
@@ -684,5 +685,125 @@ describe("orchestrator", () => {
     stopFns.forEach((stop) => {
       expect(stop).toHaveBeenCalledWith(true);
     });
+  });
+
+  it("ユーザー修正指示 → 再レビュー → 承認でワークフローが完了する", async () => {
+    mockClaudeCode.generatePlan
+      .mockResolvedValueOnce({
+        response: "Initial plan",
+        raw: { exitCode: 0, stdout: "", stderr: "" },
+      })
+      // User revision
+      .mockResolvedValueOnce({
+        response: "User-revised plan",
+        raw: { exitCode: 0, stdout: "", stderr: "" },
+      });
+
+    mockCodex.reviewPlan.mockResolvedValue({
+      response: "Looks good",
+      raw: { exitCode: 0, stdout: "", stderr: "" },
+    });
+
+    // Both plan reviews pass (initial + re-review after user revision)
+    mockJudgeReview
+      .mockResolvedValueOnce(makeJudgment(false))
+      .mockResolvedValueOnce(makeJudgment(false))
+      // code review
+      .mockResolvedValueOnce(makeJudgment(false));
+
+    // First: modify, second: approve
+    mockUi.promptPlanApproval
+      .mockResolvedValueOnce({ action: "modify", instruction: "エラーハンドリングを追加して" })
+      .mockResolvedValueOnce({ action: "approve" });
+
+    mockClaudeCode.generateCode.mockResolvedValue({
+      response: "Code",
+      raw: { exitCode: 0, stdout: "", stderr: "" },
+    });
+    mockCodex.reviewCode.mockResolvedValue({
+      response: "LGTM",
+      raw: { exitCode: 0, stdout: "", stderr: "" },
+    });
+
+    await runWorkflow(defaultOptions);
+
+    // generatePlan: initial + user revision = 2
+    expect(mockClaudeCode.generatePlan).toHaveBeenCalledTimes(2);
+    // reviewPlan: initial review + re-review after user revision = 2
+    expect(mockCodex.reviewPlan).toHaveBeenCalledTimes(2);
+    // Code generation proceeded
+    expect(mockClaudeCode.generateCode).toHaveBeenCalledTimes(1);
+  });
+
+  it("修正指示のテキストが PLAN_USER_REVISION テンプレート経由で generatePlan に渡される", async () => {
+    const userInstruction = "テスト追加してください";
+
+    mockClaudeCode.generatePlan
+      .mockResolvedValueOnce({
+        response: "Initial plan",
+        raw: { exitCode: 0, stdout: "", stderr: "" },
+      })
+      .mockResolvedValueOnce({
+        response: "Revised plan",
+        raw: { exitCode: 0, stdout: "", stderr: "" },
+      });
+
+    mockCodex.reviewPlan.mockResolvedValue({
+      response: "OK",
+      raw: { exitCode: 0, stdout: "", stderr: "" },
+    });
+
+    mockJudgeReview
+      .mockResolvedValueOnce(makeJudgment(false))
+      .mockResolvedValueOnce(makeJudgment(false))
+      .mockResolvedValueOnce(makeJudgment(false));
+
+    mockUi.promptPlanApproval
+      .mockResolvedValueOnce({ action: "modify", instruction: userInstruction })
+      .mockResolvedValueOnce({ action: "approve" });
+
+    mockClaudeCode.generateCode.mockResolvedValue({
+      response: "Code",
+      raw: { exitCode: 0, stdout: "", stderr: "" },
+    });
+    mockCodex.reviewCode.mockResolvedValue({
+      response: "LGTM",
+      raw: { exitCode: 0, stdout: "", stderr: "" },
+    });
+
+    await runWorkflow(defaultOptions);
+
+    // 2回目の generatePlan に PLAN_USER_REVISION テンプレートの内容が含まれること
+    const revisionPrompt = mockClaudeCode.generatePlan.mock.calls[1][1] as string;
+    expect(revisionPrompt).toContain(userInstruction);
+    expect(revisionPrompt).toContain("ユーザーの修正指示");
+  });
+
+  it("ユーザー修正指示後のプランが空の場合エラーで停止する", async () => {
+    mockClaudeCode.generatePlan
+      .mockResolvedValueOnce({
+        response: "Initial plan",
+        raw: { exitCode: 0, stdout: "", stderr: "" },
+      })
+      .mockResolvedValueOnce({
+        response: "",
+        raw: { exitCode: 0, stdout: "", stderr: "" },
+      });
+
+    mockCodex.reviewPlan.mockResolvedValue({
+      response: "OK",
+      raw: { exitCode: 0, stdout: "", stderr: "" },
+    });
+
+    mockJudgeReview.mockResolvedValue(makeJudgment(false));
+
+    mockUi.promptPlanApproval.mockResolvedValueOnce({
+      action: "modify",
+      instruction: "修正してください",
+    });
+
+    await expect(runWorkflow(defaultOptions)).rejects.toThrow("プラン修正結果が空です");
+
+    expect(mockClaudeCode.generateCode).not.toHaveBeenCalled();
   });
 });

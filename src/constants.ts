@@ -23,6 +23,9 @@ export const PROMPTS = {
     return prompt;
   },
 
+  PLAN_USER_REVISION: (instruction: string) =>
+    `ユーザーから以下の修正指示がありました。指示に基づいて計画を修正してください。コードは書かず、修正後の計画を最初から最後まで省略せずに全文出力してください。変更箇所の差分だけでなく、計画全体を出力してください。\n\n## ユーザーの修正指示\n${instruction}`,
+
   CODE_GENERATION: () =>
     `上記の計画に基づいて、コードを生成してください。計画に記載された内容をすべて実装してください。`,
 
@@ -82,7 +85,7 @@ ${reviewOutput}`,
 } as const;
 
 export const MESSAGES = {
-  PLAN_APPROVE: `上記の計画で進めてよろしいですか？ (y/n): `,
+  PLAN_APPROVE: `承認: y / 修正指示を入力 / 中止: Enter: `,
   LOOP_LIMIT_WARNING: (phase: string, max: number) =>
     `⚠ ${phase}のレビューループが上限（${max}回）に達しました。`,
   UNRESOLVED_CONCERNS_CONTINUE: `未解消の懸念事項があります。このまま続行しますか？ (y/n): `,

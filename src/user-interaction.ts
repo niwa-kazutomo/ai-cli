@@ -1,5 +1,5 @@
 import { createInterface } from "node:readline";
-import type { ReviewQuestion } from "./types.js";
+import type { ReviewQuestion, PlanApprovalResult } from "./types.js";
 import { SigintError } from "./errors.js";
 
 function createReadlineInterface() {
@@ -42,6 +42,51 @@ export async function confirmYesNo(message: string): Promise<boolean> {
         rl.close();
         const normalized = answer.trim().toLowerCase();
         resolve(normalized === "yes" || normalized === "y");
+      }
+    });
+  });
+}
+
+/**
+ * プラン承認プロンプト。
+ * y/yes → approve, n/no/空文字 → abort, その他テキスト → modify
+ * Ctrl+C → SigintError, EOF → abort
+ */
+export async function promptPlanApproval(message: string): Promise<PlanApprovalResult> {
+  const rl = createReadlineInterface();
+  return new Promise((resolve, reject) => {
+    let settled = false;
+    let interrupted = false;
+
+    rl.on("SIGINT", () => {
+      interrupted = true;
+      rl.close();
+    });
+
+    rl.on("close", () => {
+      if (!settled) {
+        settled = true;
+        if (interrupted) {
+          reject(new SigintError());
+        } else {
+          resolve({ action: "abort" });
+        }
+      }
+    });
+
+    rl.question(message, (answer) => {
+      if (!settled) {
+        settled = true;
+        rl.close();
+        const trimmed = answer.trim();
+        const normalized = trimmed.toLowerCase();
+        if (normalized === "y" || normalized === "yes") {
+          resolve({ action: "approve" });
+        } else if (normalized === "n" || normalized === "no" || trimmed === "") {
+          resolve({ action: "abort" });
+        } else {
+          resolve({ action: "modify", instruction: trimmed });
+        }
       }
     });
   });

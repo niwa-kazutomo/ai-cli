@@ -5,7 +5,7 @@ import { judgeReview } from "./review-judge.js";
 import * as ui from "./user-interaction.js";
 import { PROMPTS, MESSAGES } from "./constants.js";
 import { validateCapabilities, checkStreamingCapability } from "./cli-runner.js";
-import type { OrchestratorOptions, ReviewJudgment, SessionState } from "./types.js";
+import type { OrchestratorOptions, PlanApprovalResult, ReviewJudgment, SessionState } from "./types.js";
 import * as logger from "./logger.js";
 
 function formatConcerns(judgment: ReviewJudgment): string {
@@ -102,123 +102,153 @@ export async function runWorkflow(options: OrchestratorOptions): Promise<void> {
     throw new Error("プラン生成結果が空です。Claude Code からの応答が正しく取得できませんでした。");
   }
 
-  // Plan review loop
+  // Plan review + approval outer loop
   let planIteration = 0;
   let lastPlanJudgment: ReviewJudgment | null = null;
   let planReviewSummary = "";
 
-  while (planIteration < maxPlanIterations) {
-    planIteration++;
-    ui.displaySeparator();
-    ui.display(`🔎 Step 2: プランレビュー (${planIteration}/${maxPlanIterations})...`);
+  planApprovalLoop: while (true) {
+    // Inner review loop
+    while (planIteration < maxPlanIterations) {
+      planIteration++;
+      ui.displaySeparator();
+      ui.display(`🔎 Step 2: プランレビュー (${planIteration}/${maxPlanIterations})...`);
 
-    const reviewPrompt: string =
-      planIteration === 1
-        ? PROMPTS.PLAN_REVIEW(currentPlan)
-        : PROMPTS.PLAN_REVIEW_CONTINUATION(formatConcerns(lastPlanJudgment!), currentPlan);
+      const reviewPrompt: string =
+        planIteration === 1
+          ? PROMPTS.PLAN_REVIEW(currentPlan)
+          : PROMPTS.PLAN_REVIEW_CONTINUATION(formatConcerns(lastPlanJudgment!), currentPlan);
 
-    const reviewResult: Awaited<ReturnType<typeof codex.reviewPlan>> =
-      await runWithProgress(false, "プランレビュー中...", () =>
-        codex.reviewPlan(
-          session,
-          reviewPrompt,
-          codexOpts,
-          planIteration > 1 && !session.codexSessionId
-            ? {
-                planSummary: currentPlan.slice(0, 500),
-                reviewSummary: planReviewSummary.slice(0, 500),
-              }
-            : undefined,
-        ),
+      const reviewResult: Awaited<ReturnType<typeof codex.reviewPlan>> =
+        await runWithProgress(false, "プランレビュー中...", () =>
+          codex.reviewPlan(
+            session,
+            reviewPrompt,
+            codexOpts,
+            planIteration > 1 && !session.codexSessionId
+              ? {
+                  planSummary: currentPlan.slice(0, 500),
+                  reviewSummary: planReviewSummary.slice(0, 500),
+                }
+              : undefined,
+          ),
+        );
+      const reviewOutput: string = reviewResult.response;
+      planReviewSummary = reviewOutput.slice(0, 500);
+      logger.verbose("レビュー結果", reviewOutput);
+
+      // Step 2.5: Judge review
+      ui.display("⚖️ Step 2.5: レビュー判定中...");
+      const judgment: ReviewJudgment = await runWithProgress(
+        false,
+        "レビュー判定中...",
+        () =>
+          judgeReview(reviewOutput, {
+            cwd,
+            model: options.claudeModel,
+            onStdout: stdoutCallback,
+            onStderr: stderrCallback,
+          }),
       );
-    const reviewOutput: string = reviewResult.response;
-    planReviewSummary = reviewOutput.slice(0, 500);
-    logger.verbose("レビュー結果", reviewOutput);
+      lastPlanJudgment = judgment;
 
-    // Step 2.5: Judge review
-    ui.display("⚖️ Step 2.5: レビュー判定中...");
-    const judgment: ReviewJudgment = await runWithProgress(
-      false,
-      "レビュー判定中...",
-      () =>
-        judgeReview(reviewOutput, {
-          cwd,
-          model: options.claudeModel,
-          onStdout: stdoutCallback,
-          onStderr: stderrCallback,
-        }),
-    );
-    lastPlanJudgment = judgment;
+      ui.display(`\n📊 レビュー判定結果: ${judgment.summary}`);
+      if (judgment.concerns.length > 0) {
+        ui.display(`\n懸念事項:\n${formatConcerns(judgment)}`);
+      }
 
-    ui.display(`\n📊 レビュー判定結果: ${judgment.summary}`);
-    if (judgment.concerns.length > 0) {
-      ui.display(`\n懸念事項:\n${formatConcerns(judgment)}`);
+      if (!judgment.has_p3_plus_concerns) {
+        ui.display("✅ P3以上の懸念事項はありません。プランレビュー完了。");
+        break;
+      }
+
+      // Check if we've hit the limit
+      if (planIteration >= maxPlanIterations) {
+        break;
+      }
+
+      // Handle questions and revise plan
+      let userAnswers = "";
+      if (judgment.questions_for_user.length > 0) {
+        userAnswers = await ui.askQuestions(judgment.questions_for_user);
+      }
+
+      ui.displaySeparator();
+      ui.display("🔄 Step 3: プランを修正中...");
+      const revisionPrompt = PROMPTS.PLAN_REVISION(
+        formatConcerns(judgment),
+        userAnswers || undefined,
+      );
+      planResult = await runWithProgress(canStream, "プラン修正中...", () =>
+        claudeCode.generatePlan(session, revisionPrompt, claudeOpts),
+      );
+      currentPlan = planResult.response;
+      logger.verbose("修正されたプラン", currentPlan);
+
+      // 修正後プランの空チェック
+      if (!currentPlan.trim()) {
+        const r = planResult.raw;
+        logger.debug("プラン修正結果が空", `exitCode: ${r.exitCode}, stdout(${r.stdout.length}chars): ${r.stdout.slice(0, 200)}${r.stdout.length > 200 ? "..." : ""}\nstderr(${r.stderr.length}chars): ${r.stderr.slice(-200)}`);
+        throw new Error("プラン修正結果が空です。Claude Code からの応答が正しく取得できませんでした。");
+      }
     }
 
-    if (!judgment.has_p3_plus_concerns) {
-      ui.display("✅ P3以上の懸念事項はありません。プランレビュー完了。");
-      break;
+    // Loop limit check
+    if (
+      lastPlanJudgment &&
+      lastPlanJudgment.has_p3_plus_concerns &&
+      planIteration >= maxPlanIterations
+    ) {
+      ui.displaySeparator();
+      ui.display(MESSAGES.LOOP_LIMIT_WARNING("プラン", maxPlanIterations));
+      ui.display(`\n残存懸念事項:\n${formatConcerns(lastPlanJudgment)}`);
+
+      const shouldContinue = await ui.confirmYesNo(MESSAGES.UNRESOLVED_CONCERNS_CONTINUE);
+      if (!shouldContinue) {
+        ui.display(MESSAGES.WORKFLOW_ABORTED);
+        return;
+      }
     }
 
-    // Check if we've hit the limit
-    if (planIteration >= maxPlanIterations) {
-      break;
-    }
-
-    // Handle questions and revise plan
-    let userAnswers = "";
-    if (judgment.questions_for_user.length > 0) {
-      userAnswers = await ui.askQuestions(judgment.questions_for_user);
-    }
-
+    // Present plan and get approval
     ui.displaySeparator();
-    ui.display("🔄 Step 3: プランを修正中...");
-    const revisionPrompt = PROMPTS.PLAN_REVISION(
-      formatConcerns(judgment),
-      userAnswers || undefined,
-    );
+    ui.display("📋 完成したプラン:");
+    ui.displaySeparator();
+    ui.display(currentPlan);
+    ui.displaySeparator();
+
+    const approval: PlanApprovalResult = await ui.promptPlanApproval(MESSAGES.PLAN_APPROVE);
+
+    if (approval.action === "approve") {
+      break planApprovalLoop;
+    }
+
+    if (approval.action === "abort") {
+      ui.display(MESSAGES.WORKFLOW_ABORTED);
+      return;
+    }
+
+    // approval.action === "modify"
+    ui.displaySeparator();
+    ui.display("🔄 ユーザーの修正指示に基づいてプランを修正中...");
+    const userRevisionPrompt = PROMPTS.PLAN_USER_REVISION(approval.instruction);
     planResult = await runWithProgress(canStream, "プラン修正中...", () =>
-      claudeCode.generatePlan(session, revisionPrompt, claudeOpts),
+      claudeCode.generatePlan(session, userRevisionPrompt, claudeOpts),
     );
     currentPlan = planResult.response;
-    logger.verbose("修正されたプラン", currentPlan);
+    logger.verbose("ユーザー指示による修正プラン", currentPlan);
 
     // 修正後プランの空チェック
     if (!currentPlan.trim()) {
       const r = planResult.raw;
-      logger.debug("プラン修正結果が空", `exitCode: ${r.exitCode}, stdout(${r.stdout.length}chars): ${r.stdout.slice(0, 200)}${r.stdout.length > 200 ? "..." : ""}\nstderr(${r.stderr.length}chars): ${r.stderr.slice(-200)}`);
+      logger.debug("ユーザー指示によるプラン修正結果が空", `exitCode: ${r.exitCode}, stdout(${r.stdout.length}chars): ${r.stdout.slice(0, 200)}${r.stdout.length > 200 ? "..." : ""}\nstderr(${r.stderr.length}chars): ${r.stderr.slice(-200)}`);
       throw new Error("プラン修正結果が空です。Claude Code からの応答が正しく取得できませんでした。");
     }
-  }
 
-  // Loop limit check
-  if (
-    lastPlanJudgment &&
-    lastPlanJudgment.has_p3_plus_concerns &&
-    planIteration >= maxPlanIterations
-  ) {
-    ui.displaySeparator();
-    ui.display(MESSAGES.LOOP_LIMIT_WARNING("プラン", maxPlanIterations));
-    ui.display(`\n残存懸念事項:\n${formatConcerns(lastPlanJudgment)}`);
-
-    const shouldContinue = await ui.confirmYesNo(MESSAGES.UNRESOLVED_CONCERNS_CONTINUE);
-    if (!shouldContinue) {
-      ui.display(MESSAGES.WORKFLOW_ABORTED);
-      return;
-    }
-  }
-
-  // Present plan and get approval
-  ui.displaySeparator();
-  ui.display("📋 完成したプラン:");
-  ui.displaySeparator();
-  ui.display(currentPlan);
-  ui.displaySeparator();
-
-  const approved = await ui.confirmYesNo(MESSAGES.PLAN_APPROVE);
-  if (!approved) {
-    ui.display(MESSAGES.WORKFLOW_ABORTED);
-    return;
+    // Reset review state for re-review
+    planIteration = 0;
+    lastPlanJudgment = null;
+    planReviewSummary = "";
   }
 
   // ===== Code Phase =====

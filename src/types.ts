@@ -57,4 +57,9 @@ export interface OrchestratorOptions {
 
 export type ReplOptions = Omit<OrchestratorOptions, "prompt">;
 
+export type PlanApprovalResult =
+  | { action: "approve" }
+  | { action: "modify"; instruction: string }
+  | { action: "abort" };
+
 export type LogLevel = "info" | "verbose" | "debug" | "warn" | "error";
