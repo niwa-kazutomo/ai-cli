@@ -34,6 +34,9 @@ export interface CliRunOptions {
 export const CODEX_SANDBOX_MODES = ["read-only", "workspace-write", "danger-full-access"] as const;
 export type CodexSandboxMode = typeof CODEX_SANDBOX_MODES[number];
 
+export const CLI_CHOICES = ["claude", "codex"] as const;
+export type CliChoice = typeof CLI_CHOICES[number];
+
 export interface CapabilityCheckResult {
   supported: boolean;
   missingFlags: string[];
@@ -46,6 +49,9 @@ export interface OrchestratorOptions {
   claudeModel?: string;
   codexModel?: string;
   codexSandbox?: CodexSandboxMode;
+  generatorCli?: CliChoice;
+  reviewerCli?: CliChoice;
+  judgeCli?: CliChoice;
   dangerous: boolean;
   verbose: boolean;
   debug: boolean;

@@ -30,7 +30,7 @@ import {
   DEFAULT_MAX_PLAN_ITERATIONS,
   DEFAULT_MAX_CODE_ITERATIONS,
 } from "../src/constants.js";
-import type { ReplOptions, CodexSandboxMode } from "../src/types.js";
+import type { ReplOptions, CodexSandboxMode, CliChoice } from "../src/types.js";
 
 const mockRunWorkflow = vi.mocked(runWorkflow);
 const mockStartRepl = vi.mocked(startRepl);
@@ -198,6 +198,89 @@ describe("createProgram CLI routing", () => {
     );
   });
 
+  it("--generator-cli codex が正しくパースされる", async () => {
+    mockRunWorkflow.mockResolvedValue(undefined);
+    const program = createProgram();
+    await program.parseAsync(["plan", "--generator-cli", "codex", "テスト"], { from: "user" });
+
+    expect(mockRunWorkflow).toHaveBeenCalledWith(
+      expect.objectContaining({ generatorCli: "codex" }),
+    );
+  });
+
+  it("--reviewer-cli claude が正しくパースされる", async () => {
+    mockRunWorkflow.mockResolvedValue(undefined);
+    const program = createProgram();
+    await program.parseAsync(["plan", "--reviewer-cli", "claude", "テスト"], { from: "user" });
+
+    expect(mockRunWorkflow).toHaveBeenCalledWith(
+      expect.objectContaining({ reviewerCli: "claude" }),
+    );
+  });
+
+  it("--judge-cli codex が正しくパースされる", async () => {
+    mockRunWorkflow.mockResolvedValue(undefined);
+    const program = createProgram();
+    await program.parseAsync(["plan", "--judge-cli", "codex", "テスト"], { from: "user" });
+
+    expect(mockRunWorkflow).toHaveBeenCalledWith(
+      expect.objectContaining({ judgeCli: "codex" }),
+    );
+  });
+
+  it("--generator-cli 不正値で process.exit(1) が呼ばれる", async () => {
+    const exitSpy = vi.spyOn(process, "exit").mockImplementation((() => {
+      throw new Error("process.exit called");
+    }) as never);
+
+    const stderrSpy = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+
+    const program = createProgram();
+    await expect(
+      program.parseAsync(["plan", "--generator-cli", "invalid", "テスト"], { from: "user" }),
+    ).rejects.toThrow("process.exit");
+
+    expect(exitSpy).toHaveBeenCalledWith(1);
+    expect(stderrSpy).toHaveBeenCalledWith(
+      expect.stringContaining("無効な --generator-cli 値"),
+    );
+
+    exitSpy.mockRestore();
+    stderrSpy.mockRestore();
+  });
+
+  it("--reviewer-cli 不正値で process.exit(1) が呼ばれる", async () => {
+    const exitSpy = vi.spyOn(process, "exit").mockImplementation((() => {
+      throw new Error("process.exit called");
+    }) as never);
+
+    const stderrSpy = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+
+    const program = createProgram();
+    await expect(
+      program.parseAsync(["plan", "--reviewer-cli", "invalid", "テスト"], { from: "user" }),
+    ).rejects.toThrow("process.exit");
+
+    expect(exitSpy).toHaveBeenCalledWith(1);
+
+    exitSpy.mockRestore();
+    stderrSpy.mockRestore();
+  });
+
+  it("CLI オプション未指定時に generatorCli/reviewerCli/judgeCli が undefined", async () => {
+    mockRunWorkflow.mockResolvedValue(undefined);
+    const program = createProgram();
+    await program.parseAsync(["plan", "テスト"], { from: "user" });
+
+    expect(mockRunWorkflow).toHaveBeenCalledWith(
+      expect.objectContaining({
+        generatorCli: undefined,
+        reviewerCli: undefined,
+        judgeCli: undefined,
+      }),
+    );
+  });
+
   it("シングルショットでオプション指定あり → display が呼ばれる", async () => {
     mockRunWorkflow.mockResolvedValue(undefined);
     const program = createProgram();
@@ -329,6 +412,64 @@ describe("formatActiveOptions", () => {
     const result = formatActiveOptions({
       ...baseOptions,
       codexSandbox: undefined,
+    });
+    expect(result).toBeNull();
+  });
+
+  it("--generator-cli codex（デフォルト以外）→ 表示される", () => {
+    const result = formatActiveOptions({
+      ...baseOptions,
+      generatorCli: "codex",
+    });
+    expect(result).toBe("⚙ オプション: --generator-cli codex");
+  });
+
+  it("--generator-cli claude（デフォルト値）→ null を返す", () => {
+    const result = formatActiveOptions({
+      ...baseOptions,
+      generatorCli: "claude",
+    });
+    expect(result).toBeNull();
+  });
+
+  it("--reviewer-cli claude（デフォルト以外）→ 表示される", () => {
+    const result = formatActiveOptions({
+      ...baseOptions,
+      reviewerCli: "claude",
+    });
+    expect(result).toBe("⚙ オプション: --reviewer-cli claude");
+  });
+
+  it("--reviewer-cli codex（デフォルト値）→ null を返す", () => {
+    const result = formatActiveOptions({
+      ...baseOptions,
+      reviewerCli: "codex",
+    });
+    expect(result).toBeNull();
+  });
+
+  it("--judge-cli codex（デフォルト以外）→ 表示される", () => {
+    const result = formatActiveOptions({
+      ...baseOptions,
+      judgeCli: "codex",
+    });
+    expect(result).toBe("⚙ オプション: --judge-cli codex");
+  });
+
+  it("--judge-cli claude（デフォルト値）→ null を返す", () => {
+    const result = formatActiveOptions({
+      ...baseOptions,
+      judgeCli: "claude",
+    });
+    expect(result).toBeNull();
+  });
+
+  it("--generator-cli/--reviewer-cli/--judge-cli 未指定 → null を返す", () => {
+    const result = formatActiveOptions({
+      ...baseOptions,
+      generatorCli: undefined,
+      reviewerCli: undefined,
+      judgeCli: undefined,
     });
     expect(result).toBeNull();
   });

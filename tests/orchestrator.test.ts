@@ -1064,6 +1064,116 @@ describe("orchestrator", () => {
     );
   });
 
+  it("CLI 選択が validateProviderCapabilities に渡される", async () => {
+    const opts = {
+      ...defaultOptions,
+      generatorCli: "codex" as const,
+      reviewerCli: "claude" as const,
+      judgeCli: "codex" as const,
+    };
+
+    mockGenerator.generatePlan.mockResolvedValue({
+      response: "Plan",
+      raw: { exitCode: 0, stdout: "", stderr: "" },
+    });
+    mockReviewer.reviewPlan.mockResolvedValue({
+      response: "OK",
+      raw: { exitCode: 0, stdout: "", stderr: "" },
+    });
+    mockJudge.judgeReview.mockResolvedValue(makeJudgment(false));
+    mockUi.promptPlanApproval.mockResolvedValue({ action: "approve" });
+    mockGenerator.generateCode.mockResolvedValue({
+      response: "Code",
+      raw: { exitCode: 0, stdout: "", stderr: "" },
+    });
+    mockReviewer.reviewCode.mockResolvedValue({
+      response: "LGTM",
+      raw: { exitCode: 0, stdout: "", stderr: "" },
+    });
+
+    await runWorkflow(opts);
+
+    expect(mockValidateProviderCapabilities).toHaveBeenCalledWith(
+      false,
+      "/tmp",
+      expect.objectContaining({
+        generatorCli: "codex",
+        reviewerCli: "claude",
+        judgeCli: "codex",
+      }),
+    );
+  });
+
+  it("CLI 選択が createProviders に渡される", async () => {
+    const opts = {
+      ...defaultOptions,
+      generatorCli: "codex" as const,
+      reviewerCli: "claude" as const,
+    };
+
+    mockGenerator.generatePlan.mockResolvedValue({
+      response: "Plan",
+      raw: { exitCode: 0, stdout: "", stderr: "" },
+    });
+    mockReviewer.reviewPlan.mockResolvedValue({
+      response: "OK",
+      raw: { exitCode: 0, stdout: "", stderr: "" },
+    });
+    mockJudge.judgeReview.mockResolvedValue(makeJudgment(false));
+    mockUi.promptPlanApproval.mockResolvedValue({ action: "approve" });
+    mockGenerator.generateCode.mockResolvedValue({
+      response: "Code",
+      raw: { exitCode: 0, stdout: "", stderr: "" },
+    });
+    mockReviewer.reviewCode.mockResolvedValue({
+      response: "LGTM",
+      raw: { exitCode: 0, stdout: "", stderr: "" },
+    });
+
+    await runWorkflow(opts);
+
+    expect(mockCreateProviders).toHaveBeenCalledWith(
+      expect.objectContaining({
+        generatorCli: "codex",
+        reviewerCli: "claude",
+      }),
+    );
+  });
+
+  it("全 codex 構成で canStreamClaude チェックがスキップされる", async () => {
+    const opts = {
+      ...defaultOptions,
+      verbose: true,
+      generatorCli: "codex" as const,
+      reviewerCli: "codex" as const,
+      judgeCli: "codex" as const,
+    };
+
+    mockGenerator.generatePlan.mockResolvedValue({
+      response: "Plan",
+      raw: { exitCode: 0, stdout: "", stderr: "" },
+    });
+    mockReviewer.reviewPlan.mockResolvedValue({
+      response: "OK",
+      raw: { exitCode: 0, stdout: "", stderr: "" },
+    });
+    mockJudge.judgeReview.mockResolvedValue(makeJudgment(false));
+    mockUi.promptPlanApproval.mockResolvedValue({ action: "approve" });
+    mockGenerator.generateCode.mockResolvedValue({
+      response: "Code",
+      raw: { exitCode: 0, stdout: "", stderr: "" },
+    });
+    mockReviewer.reviewCode.mockResolvedValue({
+      response: "LGTM",
+      raw: { exitCode: 0, stdout: "", stderr: "" },
+    });
+
+    await runWorkflow(opts);
+
+    // Claude streaming check がスキップされること
+    expect(mockCheckClaudeStreamingCapability).not.toHaveBeenCalled();
+  });
+
   it("fallbackContext が常に渡される（2回目以降のレビュー時）", async () => {
     mockGenerator.generatePlan.mockResolvedValue({
       response: "Plan",

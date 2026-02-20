@@ -120,23 +120,39 @@ export async function runWorkflow(options: OrchestratorOptions): Promise<void> {
       }
     : undefined;
 
+  const generatorCli = options.generatorCli ?? "claude";
+  const reviewerCli = options.reviewerCli ?? "codex";
+
   // Step 0: Capability check
   ui.display("🔍 CLI の互換性をチェックしています...");
-  const capError = await validateProviderCapabilities(dangerous, cwd);
+  const capError = await validateProviderCapabilities(dangerous, cwd, {
+    generatorCli: options.generatorCli,
+    reviewerCli: options.reviewerCli,
+    judgeCli: options.judgeCli,
+  });
   if (capError) {
     throw new Error(capError);
   }
   ui.display("✅ CLI の互換性チェックに成功しました");
 
   // ストリーミング capability チェック
+  // Claude を使うロールがある場合のみ stream-json チェックを実行
+  const needsClaudeStreamCheck = [generatorCli, reviewerCli].includes("claude");
   let canStreamClaude = false;
-  if (shouldStream) {
+  if (shouldStream && needsClaudeStreamCheck) {
     canStreamClaude = await checkClaudeStreamingCapability(cwd);
     if (!canStreamClaude) {
-      logger.warn("Claude CLI が stream-json に非対応のため、ストリーミングは無効になります。");
+      logger.warn("Claude CLI が stream-json に非対応のため、Claude のストリーミングは無効になります。");
     }
   }
-  const canStream = shouldStream && canStreamClaude;
+
+  // ロール別ストリーミング判定
+  const canStreamGenerator = generatorCli === "claude"
+    ? (shouldStream && canStreamClaude)
+    : shouldStream;
+  const canStreamReviewer = reviewerCli === "claude"
+    ? (shouldStream && canStreamClaude)
+    : shouldStream;
 
   const { generator, reviewer, judge } = createProviders({
     cwd,
@@ -144,6 +160,9 @@ export async function runWorkflow(options: OrchestratorOptions): Promise<void> {
     codexModel: options.codexModel,
     dangerous,
     codexSandbox: options.codexSandbox,
+    generatorCli: options.generatorCli,
+    reviewerCli: options.reviewerCli,
+    judgeCli: options.judgeCli,
     streaming: shouldStream,
     canStreamClaude,
     onStdout: stdoutCallback,
@@ -156,7 +175,7 @@ export async function runWorkflow(options: OrchestratorOptions): Promise<void> {
   logger.verbose("プロンプト", prompt);
 
   const planPrompt = PROMPTS.PLAN_GENERATION(prompt);
-  let planResult = await runWithProgress(canStream, "プラン生成中...", () =>
+  let planResult = await runWithProgress(canStreamGenerator, "プラン生成中...", () =>
     generator.generatePlan(planPrompt),
   );
   let currentPlan = planResult.response;
@@ -187,7 +206,7 @@ export async function runWorkflow(options: OrchestratorOptions): Promise<void> {
           ? PROMPTS.PLAN_REVIEW(currentPlan)
           : PROMPTS.PLAN_REVIEW_CONTINUATION(formatConcerns(lastPlanJudgment!), currentPlan);
 
-      const reviewResult = await runWithProgress(shouldStream, "プランレビュー中...", () =>
+      const reviewResult = await runWithProgress(canStreamReviewer, "プランレビュー中...", () =>
         reviewer.reviewPlan(
           reviewPrompt,
           planIteration > 1
@@ -239,7 +258,7 @@ export async function runWorkflow(options: OrchestratorOptions): Promise<void> {
         formatConcerns(judgment),
         userAnswers || undefined,
       );
-      planResult = await runWithProgress(canStream, "プラン修正中...", () =>
+      planResult = await runWithProgress(canStreamGenerator, "プラン修正中...", () =>
         generator.generatePlan(revisionPrompt),
       );
 
@@ -258,7 +277,7 @@ export async function runWorkflow(options: OrchestratorOptions): Promise<void> {
       const updated = await updatePlanWithRetry(
         planResult.response, lastKnownFullPlan,
         originalContext,
-        generator, canStream,
+        generator, canStreamGenerator,
       );
       currentPlan = updated.plan;
       if (!updated.fellBack) {
@@ -306,7 +325,7 @@ export async function runWorkflow(options: OrchestratorOptions): Promise<void> {
     ui.displaySeparator();
     ui.display("🔄 ユーザーの修正指示に基づいてプランを修正中...");
     const userRevisionPrompt = PROMPTS.PLAN_USER_REVISION(currentPlan, approval.instruction);
-    planResult = await runWithProgress(canStream, "プラン修正中...", () =>
+    planResult = await runWithProgress(canStreamGenerator, "プラン修正中...", () =>
       generator.generatePlan(userRevisionPrompt),
     );
 
@@ -321,7 +340,7 @@ export async function runWorkflow(options: OrchestratorOptions): Promise<void> {
     const updated = await updatePlanWithRetry(
       planResult.response, lastKnownFullPlan,
       approval.instruction,
-      generator, canStream,
+      generator, canStreamGenerator,
     );
     currentPlan = updated.plan;
     if (!updated.fellBack) {
@@ -355,7 +374,7 @@ export async function runWorkflow(options: OrchestratorOptions): Promise<void> {
   ui.display("💻 Step 4: コード生成を開始します...");
 
   const codePrompt = PROMPTS.CODE_GENERATION();
-  const codeResult = await runWithProgress(canStream, "コード生成中...", () =>
+  const codeResult = await runWithProgress(canStreamGenerator, "コード生成中...", () =>
     generator.generateCode(codePrompt),
   );
   logger.verbose("コード生成結果", codeResult.response);
@@ -386,7 +405,7 @@ export async function runWorkflow(options: OrchestratorOptions): Promise<void> {
     }
     const codeReviewPrompt = PROMPTS.CODE_REVIEW(currentPlan, gitDiff);
 
-    const codeReviewResult = await runWithProgress(shouldStream, "コードレビュー中...", () =>
+    const codeReviewResult = await runWithProgress(canStreamReviewer, "コードレビュー中...", () =>
       reviewer.reviewCode(codeReviewPrompt),
     );
     const codeReviewOutput = codeReviewResult.response;
@@ -418,7 +437,7 @@ export async function runWorkflow(options: OrchestratorOptions): Promise<void> {
     ui.displaySeparator();
     ui.display("🔄 Step 6: コードを修正中...");
     const codeRevisionPrompt = PROMPTS.CODE_REVISION(formatConcerns(codeJudgment));
-    await runWithProgress(canStream, "コード修正中...", () =>
+    await runWithProgress(canStreamGenerator, "コード修正中...", () =>
       generator.generateCode(codeRevisionPrompt),
     );
     logger.verbose("コード修正完了");

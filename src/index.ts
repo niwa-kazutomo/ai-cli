@@ -7,9 +7,12 @@ import { SigintError } from "./errors.js";
 import {
   DEFAULT_MAX_PLAN_ITERATIONS,
   DEFAULT_MAX_CODE_ITERATIONS,
+  DEFAULT_GENERATOR_CLI,
+  DEFAULT_REVIEWER_CLI,
+  DEFAULT_JUDGE_CLI,
 } from "./constants.js";
-import { CODEX_SANDBOX_MODES } from "./types.js";
-import type { ReplOptions, CodexSandboxMode } from "./types.js";
+import { CODEX_SANDBOX_MODES, CLI_CHOICES } from "./types.js";
+import type { ReplOptions, CodexSandboxMode, CliChoice } from "./types.js";
 
 const VERSION = "0.1.0";
 
@@ -20,6 +23,9 @@ function buildWorkflowOptions(opts: Record<string, unknown>): ReplOptions {
     claudeModel: opts.claudeModel as string | undefined,
     codexModel: opts.codexModel as string | undefined,
     codexSandbox: opts.codexSandbox as CodexSandboxMode | undefined,
+    generatorCli: opts.generatorCli as CliChoice | undefined,
+    reviewerCli: opts.reviewerCli as CliChoice | undefined,
+    judgeCli: opts.judgeCli as CliChoice | undefined,
     dangerous: Boolean(opts.dangerous),
     verbose: Boolean(opts.verbose),
     debug: Boolean(opts.debug),
@@ -46,6 +52,15 @@ export function formatActiveOptions(options: ReplOptions): string | null {
     parts.push(`--codex-model ${JSON.stringify(options.codexModel)}`);
   if (options.codexSandbox !== undefined)
     parts.push(`--codex-sandbox ${options.codexSandbox}`);
+  const genCli = options.generatorCli ?? DEFAULT_GENERATOR_CLI;
+  const revCli = options.reviewerCli ?? DEFAULT_REVIEWER_CLI;
+  const judCli = options.judgeCli ?? DEFAULT_JUDGE_CLI;
+  if (genCli !== DEFAULT_GENERATOR_CLI)
+    parts.push(`--generator-cli ${genCli}`);
+  if (revCli !== DEFAULT_REVIEWER_CLI)
+    parts.push(`--reviewer-cli ${revCli}`);
+  if (judCli !== DEFAULT_JUDGE_CLI)
+    parts.push(`--judge-cli ${judCli}`);
   if (options.maxPlanIterations !== DEFAULT_MAX_PLAN_ITERATIONS)
     parts.push(`--max-plan-iterations ${String(options.maxPlanIterations)}`);
   if (options.maxCodeIterations !== DEFAULT_MAX_CODE_ITERATIONS)
@@ -88,6 +103,9 @@ export function createProgram(): Command {
     .option("--claude-model <model>", "Claude Code のモデル指定")
     .option("--codex-model <model>", "Codex のモデル指定")
     .option("--codex-sandbox <mode>", "Codex コードレビュー時の sandbox モード (read-only, workspace-write, danger-full-access)")
+    .option("--generator-cli <cli>", "Generator の CLI 選択 (claude|codex)")
+    .option("--reviewer-cli <cli>", "Reviewer の CLI 選択 (claude|codex)")
+    .option("--judge-cli <cli>", "Judge の CLI 選択 (claude|codex)")
     .option(
       "--dangerous",
       "コード生成時に --dangerously-skip-permissions を使用",
@@ -104,6 +122,21 @@ export function createProgram(): Command {
           `❌ 無効な --codex-sandbox 値: ${JSON.stringify(opts.codexSandbox)}\n有効な値: ${CODEX_SANDBOX_MODES.join(", ")}\n`,
         );
         process.exit(1);
+      }
+      for (const [optName, optValue] of [
+        ["--generator-cli", opts.generatorCli],
+        ["--reviewer-cli", opts.reviewerCli],
+        ["--judge-cli", opts.judgeCli],
+      ] as const) {
+        if (
+          optValue !== undefined &&
+          !(CLI_CHOICES as readonly string[]).includes(optValue as string)
+        ) {
+          process.stderr.write(
+            `❌ 無効な ${optName} 値: ${JSON.stringify(optValue)}\n有効な値: ${CLI_CHOICES.join(", ")}\n`,
+          );
+          process.exit(1);
+        }
       }
       setupLogger(opts);
       const workflowOptions = buildWorkflowOptions(opts);

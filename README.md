@@ -1,43 +1,96 @@
 # AI CLI
 
-このプロジェクトは Claude Code と Codex CLI を連携し、より高品質なコード生成を実現するためのツールです。
+Claude Code と Codex CLI を連携して、プラン生成→レビュー→コード生成→コードレビューを実行する CLI ツールです。
 
-## ワークフロー
+## コマンド
 
-本ツールは以下に示すワークフローを自動化することを目的としています。
+本ツールの実行コマンドは `plan` のみです。
 
-1. ユーザーがコマンドラインからプロンプトを入力
-2. プランモードでコード生成の計画を立てる
-3. 作成された計画のレビューを実施
-4. レビューの結果を受け取り、必要に応じてコード生成の計画を修正
-5. 計画のレビュワーが計画に合意する(P3以上の懸念事項がなくなる)まで、3-4を繰り返す
-6. 完成した計画をユーザーへ提示して、同意を求める
-7. ユーザーが同意したら、コード生成を実行
-8. git 差分のコードレビューを依頼し、レビュー結果を受け取る
-9. レビュー結果を元にコードを修正
-10. コードレビュワーのコードへの指摘がなくなる(P3以上の懸念事項がなくなる)まで、8-9を繰り返す
-11. ユーザーへコード生成の完了を通知
+```bash
+ai plan [prompt] [options]
+```
 
-## 各LLMの責務
+- `prompt` を指定した場合: 1 回実行（シングルショット）
+- `prompt` を省略した場合: REPL モード起動
+- `ai` / `ai --verbose` のように `plan` を省略した場合も `plan` コマンドとして扱われます
 
-プラン生成: Claude Code
-プランレビュワー: Codex
-コード生成: Claude Code
-コードレビュワー: Codex
+## コマンドラインオプション
 
-## 使い方
+`ai plan` で使用できるオプション一覧:
 
-1. プロジェクトのルートディレクトリで、以下のコマンドを実行してプロンプトを入力します。
-   ```bash
-   ai plan "ユーザーストーリーやタスクの説明"
-   ```
-   
-2. プラン生成とレビューのプロセスが自動的に開始されます。レビュワーが計画に合意するまで、プラン生成とレビューのプロセスが繰り返されます。
+| オプション | 型 | デフォルト | 説明 |
+|---|---|---|---|
+| `--max-plan-iterations <n>` | number | `10` | プランレビュー最大回数 |
+| `--max-code-iterations <n>` | number | `10` | コードレビュー最大回数 |
+| `--claude-model <model>` | string | なし | Claude Code のモデル指定 |
+| `--codex-model <model>` | string | なし | Codex のモデル指定 |
+| `--codex-sandbox <mode>` | string | `workspace-write` | Codex コードレビュー時の sandbox モード |
+| `--generator-cli <cli>` | string | `claude` | Generator の CLI 選択 (`claude` \| `codex`) |
+| `--reviewer-cli <cli>` | string | `codex` | Reviewer の CLI 選択 (`claude` \| `codex`) |
+| `--judge-cli <cli>` | string | `claude` | Judge の CLI 選択 (`claude` \| `codex`) |
+| `--dangerous` | flag | `false` | Claude Code 実行時に `--dangerously-skip-permissions` を使用 |
+| `--verbose` | flag | `false` | 詳細ログ出力（要約ベース） |
+| `--debug` | flag | `false` | 全文ログ出力（開発用） |
+| `--cwd <dir>` | string | カレントディレクトリ | 作業ディレクトリ指定 |
 
-3. 計画が完成し、ユーザーが同意するとコード生成が開始されます。コード生成の完了後、コードレビューが自動的に依頼されます。
+`--codex-sandbox` の許可値:
 
-4. コードレビュワーがコードに対して指摘を行い、指摘がなくなるまでコードの修正とレビューのプロセスが繰り返されます。
+- `read-only`
+- `workspace-write`
+- `danger-full-access`
 
-## 注意事項
+補足:
 
-- Claude Code / Codex 共に、セッションIDはワークフロー 1 の時点で固定し、その後のプロセス全体で同一のセッションIDを使用することで、同一の会話履歴を参照しながらプラン生成やコード生成、レビューを行います。
+- `--debug` を指定するとログレベルは debug になります（verbose も有効化）
+- `--codex-sandbox` に不正値を指定するとエラー終了します
+
+## 実行例
+
+シングルショット:
+
+```bash
+ai plan "ユーザーストーリーやタスクの説明"
+```
+
+REPL モード:
+
+```bash
+ai plan
+```
+
+オプション指定例:
+
+```bash
+ai plan "認証機能を追加" \
+  --claude-model sonnet \
+  --codex-model gpt-5-codex \
+  --codex-sandbox read-only \
+  --max-plan-iterations 7 \
+  --max-code-iterations 6 \
+  --verbose
+```
+
+CLI 選択例:
+
+```bash
+# Generator を Codex に変更（Codex でプラン生成・コード生成）
+ai plan --generator-cli codex "テスト"
+
+# Reviewer を Claude に変更（Claude でレビュー）
+ai plan --reviewer-cli claude "テスト"
+
+# 全ロールを Codex に
+ai plan --generator-cli codex --reviewer-cli codex --judge-cli codex "テスト"
+```
+
+## ワークフロー概要
+
+1. Generator（デフォルト: Claude Code）が実装プランを生成
+2. Reviewer（デフォルト: Codex）がプランをレビュー
+3. 必要に応じてプラン修正と再レビューを反復
+4. ユーザー承認後に Generator がコード生成
+5. Git 差分を Reviewer がレビュー
+6. 必要に応じてコード修正と再レビューを反復
+
+各ロールの CLI は `--generator-cli`, `--reviewer-cli`, `--judge-cli` で変更できます。
+モデルは CLI に応じて `--claude-model` / `--codex-model` の値が使用されます。
