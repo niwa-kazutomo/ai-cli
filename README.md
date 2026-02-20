@@ -23,19 +23,16 @@ bun run build
 
 ## コマンド
 
-本ツールの実行コマンドは `plan` のみです。
-
 ```bash
-ai plan [prompt] [options]
+ai [prompt] [options]
 ```
 
 - `prompt` を指定した場合: 1 回実行（シングルショット）
 - `prompt` を省略した場合: REPL モード起動
-- `ai` / `ai --verbose` のように `plan` を省略した場合も `plan` コマンドとして扱われます
 
 ## コマンドラインオプション
 
-`ai plan` で使用できるオプション一覧:
+`ai` で使用できるオプション一覧:
 
 | オプション | 型 | デフォルト | 説明 |
 |---|---|---|---|
@@ -63,19 +60,19 @@ ai plan [prompt] [options]
 シングルショット:
 
 ```bash
-ai plan "ユーザーストーリーやタスクの説明"
+ai "ユーザーストーリーやタスクの説明"
 ```
 
 REPL モード:
 
 ```bash
-ai plan
+ai
 ```
 
 オプション指定例:
 
 ```bash
-ai plan "認証機能を追加" \
+ai "認証機能を追加" \
   --claude-model sonnet \
   --codex-model gpt-5-codex \
   --codex-sandbox read-only \
@@ -88,13 +85,13 @@ CLI 選択例:
 
 ```bash
 # Generator を Codex に変更（Codex でプラン生成・コード生成）
-ai plan --generator-cli codex "テスト"
+ai --generator-cli codex "テスト"
 
 # Reviewer を Claude に変更（Claude でレビュー）
-ai plan --reviewer-cli claude "テスト"
+ai --reviewer-cli claude "テスト"
 
 # 全ロールを Codex に
-ai plan --generator-cli codex --reviewer-cli codex --judge-cli codex "テスト"
+ai --generator-cli codex --reviewer-cli codex --judge-cli codex "テスト"
 ```
 
 ## ワークフロー概要
