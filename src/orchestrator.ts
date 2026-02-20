@@ -1,12 +1,9 @@
-import { createSession } from "./session.js";
-import * as claudeCode from "./claude-code.js";
-import type { ClaudeCodeOptions } from "./claude-code.js";
-import * as codex from "./codex.js";
-import { judgeReview } from "./review-judge.js";
+import { createProviders, validateProviderCapabilities, checkClaudeStreamingCapability } from "./providers/factory.js";
+import type { Generator, Reviewer, Judge } from "./providers/types.js";
+import { checkGitRepo, checkGitChanges, getGitDiff } from "./git-utils.js";
 import * as ui from "./user-interaction.js";
 import { PROMPTS, MESSAGES } from "./constants.js";
-import { validateCapabilities, checkStreamingCapability } from "./cli-runner.js";
-import type { OrchestratorOptions, PlanApprovalResult, ReviewJudgment, SessionState } from "./types.js";
+import type { OrchestratorOptions, PlanApprovalResult, ReviewJudgment } from "./types.js";
 import * as logger from "./logger.js";
 
 export function isDiffLikeResponse(response: string, basePlan: string): boolean {
@@ -71,8 +68,7 @@ async function updatePlanWithRetry(
   newResponse: string,
   lastKnownFullPlan: string,
   originalContext: string,
-  session: SessionState,
-  claudeOpts: ClaudeCodeOptions,
+  generator: Generator,
   canStream: boolean,
 ): Promise<{ plan: string; wasRetried: boolean; fellBack: boolean }> {
   if (!isDiffLikeResponse(newResponse, lastKnownFullPlan)) {
@@ -86,7 +82,7 @@ async function updatePlanWithRetry(
   try {
     const retryPrompt = PROMPTS.PLAN_FULLTEXT_RETRY(lastKnownFullPlan, newResponse, originalContext);
     const retryResult = await runWithProgress(canStream, "全文再取得中...", () =>
-      claudeCode.generatePlan(session, retryPrompt, claudeOpts),
+      generator.generatePlan(retryPrompt),
     );
 
     if (!retryResult.response.trim()) {
@@ -126,39 +122,33 @@ export async function runWorkflow(options: OrchestratorOptions): Promise<void> {
 
   // Step 0: Capability check
   ui.display("🔍 CLI の互換性をチェックしています...");
-  const capError = await validateCapabilities(dangerous, cwd);
+  const capError = await validateProviderCapabilities(dangerous, cwd);
   if (capError) {
     throw new Error(capError);
   }
   ui.display("✅ CLI の互換性チェックに成功しました");
 
   // ストリーミング capability チェック
-  let streamingAvailable = false;
+  let canStreamClaude = false;
   if (shouldStream) {
-    streamingAvailable = await checkStreamingCapability(cwd);
-    if (!streamingAvailable) {
+    canStreamClaude = await checkClaudeStreamingCapability(cwd);
+    if (!canStreamClaude) {
       logger.warn("Claude CLI が stream-json に非対応のため、ストリーミングは無効になります。");
     }
   }
-  const canStream = shouldStream && streamingAvailable;
+  const canStream = shouldStream && canStreamClaude;
 
-  const session = createSession();
-  const claudeOpts = {
+  const { generator, reviewer, judge } = createProviders({
     cwd,
-    model: options.claudeModel,
+    claudeModel: options.claudeModel,
+    codexModel: options.codexModel,
     dangerous,
-    streaming: canStream,
-    onStdout: canStream ? stdoutCallback : undefined,
-    onStderr: stderrCallback,
-  };
-  const codexOpts = {
-    cwd,
-    model: options.codexModel,
-    sandbox: options.codexSandbox,
+    codexSandbox: options.codexSandbox,
     streaming: shouldStream,
+    canStreamClaude,
     onStdout: stdoutCallback,
     onStderr: stderrCallback,
-  };
+  });
 
   // ===== Plan Phase =====
   ui.displaySeparator();
@@ -167,7 +157,7 @@ export async function runWorkflow(options: OrchestratorOptions): Promise<void> {
 
   const planPrompt = PROMPTS.PLAN_GENERATION(prompt);
   let planResult = await runWithProgress(canStream, "プラン生成中...", () =>
-    claudeCode.generatePlan(session, planPrompt, claudeOpts),
+    generator.generatePlan(planPrompt),
   );
   let currentPlan = planResult.response;
   let lastKnownFullPlan = currentPlan;
@@ -197,20 +187,17 @@ export async function runWorkflow(options: OrchestratorOptions): Promise<void> {
           ? PROMPTS.PLAN_REVIEW(currentPlan)
           : PROMPTS.PLAN_REVIEW_CONTINUATION(formatConcerns(lastPlanJudgment!), currentPlan);
 
-      const reviewResult: Awaited<ReturnType<typeof codex.reviewPlan>> =
-        await runWithProgress(shouldStream, "プランレビュー中...", () =>
-          codex.reviewPlan(
-            session,
-            reviewPrompt,
-            codexOpts,
-            planIteration > 1 && !session.codexSessionId
-              ? {
-                  planSummary: currentPlan.slice(0, 500),
-                  reviewSummary: planReviewSummary.slice(0, 500),
-                }
-              : undefined,
-          ),
-        );
+      const reviewResult = await runWithProgress(shouldStream, "プランレビュー中...", () =>
+        reviewer.reviewPlan(
+          reviewPrompt,
+          planIteration > 1
+            ? {
+                planSummary: currentPlan.slice(0, 500),
+                reviewSummary: planReviewSummary.slice(0, 500),
+              }
+            : undefined,
+        ),
+      );
       const reviewOutput: string = reviewResult.response;
       planReviewSummary = reviewOutput.slice(0, 500);
       logger.verbose("レビュー結果", reviewOutput);
@@ -220,13 +207,7 @@ export async function runWorkflow(options: OrchestratorOptions): Promise<void> {
       const judgment: ReviewJudgment = await runWithProgress(
         shouldStream,
         "レビュー判定中...",
-        () =>
-          judgeReview(reviewOutput, {
-            cwd,
-            model: options.claudeModel,
-            onStdout: stdoutCallback,
-            onStderr: stderrCallback,
-          }),
+        () => judge.judgeReview(reviewOutput),
       );
       lastPlanJudgment = judgment;
 
@@ -259,7 +240,7 @@ export async function runWorkflow(options: OrchestratorOptions): Promise<void> {
         userAnswers || undefined,
       );
       planResult = await runWithProgress(canStream, "プラン修正中...", () =>
-        claudeCode.generatePlan(session, revisionPrompt, claudeOpts),
+        generator.generatePlan(revisionPrompt),
       );
 
       // 修正後プランの空チェック
@@ -277,7 +258,7 @@ export async function runWorkflow(options: OrchestratorOptions): Promise<void> {
       const updated = await updatePlanWithRetry(
         planResult.response, lastKnownFullPlan,
         originalContext,
-        session, claudeOpts, canStream,
+        generator, canStream,
       );
       currentPlan = updated.plan;
       if (!updated.fellBack) {
@@ -326,7 +307,7 @@ export async function runWorkflow(options: OrchestratorOptions): Promise<void> {
     ui.display("🔄 ユーザーの修正指示に基づいてプランを修正中...");
     const userRevisionPrompt = PROMPTS.PLAN_USER_REVISION(currentPlan, approval.instruction);
     planResult = await runWithProgress(canStream, "プラン修正中...", () =>
-      claudeCode.generatePlan(session, userRevisionPrompt, claudeOpts),
+      generator.generatePlan(userRevisionPrompt),
     );
 
     // 修正後プランの空チェック
@@ -340,7 +321,7 @@ export async function runWorkflow(options: OrchestratorOptions): Promise<void> {
     const updated = await updatePlanWithRetry(
       planResult.response, lastKnownFullPlan,
       approval.instruction,
-      session, claudeOpts, canStream,
+      generator, canStream,
     );
     currentPlan = updated.plan;
     if (!updated.fellBack) {
@@ -375,7 +356,7 @@ export async function runWorkflow(options: OrchestratorOptions): Promise<void> {
 
   const codePrompt = PROMPTS.CODE_GENERATION();
   const codeResult = await runWithProgress(canStream, "コード生成中...", () =>
-    claudeCode.generateCode(session, codePrompt, claudeOpts),
+    generator.generateCode(codePrompt),
   );
   logger.verbose("コード生成結果", codeResult.response);
 
@@ -388,25 +369,25 @@ export async function runWorkflow(options: OrchestratorOptions): Promise<void> {
     ui.displaySeparator();
     ui.display(`🔎 Step 5: コードレビュー (${codeIteration}/${maxCodeIterations})...`);
 
-    const isGitRepo = await codex.checkGitRepo(cwd);
+    const isGitRepo = await checkGitRepo(cwd);
     if (!isGitRepo) {
       throw new Error(MESSAGES.NO_GIT_REPO);
     }
 
-    const hasChanges = await codex.checkGitChanges(cwd);
+    const hasChanges = await checkGitChanges(cwd);
     if (!hasChanges) {
       throw new Error(MESSAGES.NO_GIT_CHANGES);
     }
 
     // Code review with Codex
-    const gitDiff = await codex.getGitDiff(cwd);
+    const gitDiff = await getGitDiff(cwd);
     if (!gitDiff.trim()) {
       throw new Error("Git の変更が検出されましたが、差分の取得に失敗しました。");
     }
     const codeReviewPrompt = PROMPTS.CODE_REVIEW(currentPlan, gitDiff);
 
     const codeReviewResult = await runWithProgress(shouldStream, "コードレビュー中...", () =>
-      codex.reviewCode(codeReviewPrompt, codexOpts),
+      reviewer.reviewCode(codeReviewPrompt),
     );
     const codeReviewOutput = codeReviewResult.response;
     logger.verbose("コードレビュー結果", codeReviewOutput);
@@ -414,12 +395,7 @@ export async function runWorkflow(options: OrchestratorOptions): Promise<void> {
     // Step 5.5: Judge code review
     ui.display("⚖️ Step 5.5: コードレビュー判定中...");
     const codeJudgment = await runWithProgress(shouldStream, "コードレビュー判定中...", () =>
-      judgeReview(codeReviewOutput, {
-        cwd,
-        model: options.claudeModel,
-        onStdout: stdoutCallback,
-        onStderr: stderrCallback,
-      }),
+      judge.judgeReview(codeReviewOutput),
     );
     lastCodeJudgment = codeJudgment;
 
@@ -443,7 +419,7 @@ export async function runWorkflow(options: OrchestratorOptions): Promise<void> {
     ui.display("🔄 Step 6: コードを修正中...");
     const codeRevisionPrompt = PROMPTS.CODE_REVISION(formatConcerns(codeJudgment));
     await runWithProgress(canStream, "コード修正中...", () =>
-      claudeCode.generateCode(session, codeRevisionPrompt, claudeOpts),
+      generator.generateCode(codeRevisionPrompt),
     );
     logger.verbose("コード修正完了");
   }

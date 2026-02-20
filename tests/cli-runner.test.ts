@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { runCli, checkCapabilities, validateCapabilities } from "../src/cli-runner.js";
+import { runCli, checkCapabilities } from "../src/cli-runner.js";
 
 describe("runCli", () => {
   it("正常にコマンドを実行して stdout/stderr をキャプチャする", async () => {

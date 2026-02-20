@@ -39,13 +39,6 @@ export interface CapabilityCheckResult {
   missingFlags: string[];
 }
 
-export interface SessionState {
-  claudeSessionId: string | null;
-  claudeFirstRun: boolean;
-  codexSessionId: string | null;
-  codexFirstRun: boolean;
-}
-
 export interface OrchestratorOptions {
   prompt: string;
   maxPlanIterations: number;
