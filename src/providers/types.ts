@@ -15,7 +15,10 @@ export interface Reviewer {
     prompt: string,
     fallbackContext?: { planSummary: string; reviewSummary: string },
   ): Promise<ProviderResult>;
-  reviewCode(prompt: string): Promise<ProviderResult>;
+  reviewCode(
+    prompt: string,
+    fallbackContext?: { diffSummary: string; reviewSummary: string },
+  ): Promise<ProviderResult>;
 }
 
 export interface Judge {

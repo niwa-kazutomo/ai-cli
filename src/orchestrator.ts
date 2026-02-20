@@ -382,6 +382,8 @@ export async function runWorkflow(options: OrchestratorOptions): Promise<void> {
   // Code review loop
   let codeIteration = 0;
   let lastCodeJudgment: ReviewJudgment | null = null;
+  let codeReviewSummary = "";
+  let lastCodeDiffSummary = "";
 
   while (codeIteration < maxCodeIterations) {
     codeIteration++;
@@ -403,12 +405,33 @@ export async function runWorkflow(options: OrchestratorOptions): Promise<void> {
     if (!gitDiff.trim()) {
       throw new Error("Git の変更が検出されましたが、差分の取得に失敗しました。");
     }
-    const codeReviewPrompt = PROMPTS.CODE_REVIEW(currentPlan, gitDiff);
+
+    // 前回レビュー時点の diff 要約を保持（フォールバック用）
+    const prevDiffSummary = lastCodeDiffSummary;
+    lastCodeDiffSummary = gitDiff.slice(0, 500);
+
+    const codeReviewPrompt =
+      codeIteration === 1
+        ? PROMPTS.CODE_REVIEW(currentPlan, gitDiff)
+        : PROMPTS.CODE_REVIEW_CONTINUATION(
+            formatConcerns(lastCodeJudgment!),
+            currentPlan,
+            gitDiff,
+          );
 
     const codeReviewResult = await runWithProgress(canStreamReviewer, "コードレビュー中...", () =>
-      reviewer.reviewCode(codeReviewPrompt),
+      reviewer.reviewCode(
+        codeReviewPrompt,
+        codeIteration > 1
+          ? {
+              diffSummary: prevDiffSummary.slice(0, 500),
+              reviewSummary: codeReviewSummary.slice(0, 500),
+            }
+          : undefined,
+      ),
     );
     const codeReviewOutput = codeReviewResult.response;
+    codeReviewSummary = codeReviewOutput.slice(0, 500);
     logger.verbose("コードレビュー結果", codeReviewOutput);
 
     // Step 5.5: Judge code review

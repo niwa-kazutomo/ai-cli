@@ -21,6 +21,7 @@ export interface CodexReviewerConfig {
 
 export class CodexReviewer implements Reviewer {
   private sessionId: string | null = null;
+  private codeReviewSessionId: string | null = null;
   private firstRun = true;
   private readonly config: CodexReviewerConfig;
 
@@ -83,9 +84,25 @@ export class CodexReviewer implements Reviewer {
     return { response, raw: result };
   }
 
-  async reviewCode(prompt: string): Promise<ProviderResult> {
+  async reviewCode(
+    prompt: string,
+    fallbackContext?: { diffSummary: string; reviewSummary: string },
+  ): Promise<ProviderResult> {
     const sandboxMode = this.config.sandbox ?? "workspace-write";
-    const args = ["exec", "--sandbox", sandboxMode, "--json"];
+    let args: string[];
+
+    if (this.codeReviewSessionId) {
+      args = ["exec", "resume", this.codeReviewSessionId, "--json"];
+    } else if (fallbackContext) {
+      const context = buildCodeReviewSummaryContext(
+        fallbackContext.diffSummary,
+        fallbackContext.reviewSummary,
+      );
+      prompt = `${context}\n\n${prompt}`;
+      args = ["exec", "--sandbox", sandboxMode, "--json"];
+    } else {
+      args = ["exec", "--sandbox", sandboxMode, "--json"];
+    }
 
     if (this.config.model) {
       args.push("--model", this.config.model);
@@ -99,6 +116,17 @@ export class CodexReviewer implements Reviewer {
       throw new Error(
         `Codex のコードレビューが失敗しました (exit code: ${result.exitCode})\n${result.stderr}`,
       );
+    }
+
+    // セッション ID 未取得なら毎回抽出を試行
+    if (!this.codeReviewSessionId) {
+      const extractedId = streamResult?.sessionId ?? extractCodexSessionId(result.stdout);
+      if (extractedId) {
+        this.codeReviewSessionId = extractedId;
+        logger.debug(`Codex コードレビューセッション ID 抽出成功: ${extractedId}`);
+      } else {
+        logger.verbose("Codex コードレビューセッション ID の抽出に失敗しました。フォールバックモードで継続します。");
+      }
     }
 
     const response = streamResult?.response?.trim()
@@ -238,4 +266,14 @@ export function buildSummaryContext(
   reviewSummary: string,
 ): string {
   return `## これまでの経緯\n\n### 計画の要約\n${planSummary}\n\n### レビューの要約\n${reviewSummary}`;
+}
+
+/**
+ * コードレビューのセッション ID 抽出失敗時のフォールバック用要約コンテキストを生成する。
+ */
+export function buildCodeReviewSummaryContext(
+  diffSummary: string,
+  reviewSummary: string,
+): string {
+  return `## これまでの経緯\n\n### 前回の差分要約\n${diffSummary}\n\n### 前回のレビュー要約\n${reviewSummary}`;
 }

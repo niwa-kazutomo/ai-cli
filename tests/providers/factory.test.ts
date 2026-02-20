@@ -131,7 +131,7 @@ describe("validateProviderCapabilities", () => {
     expect(codexCall![2]).not.toContain("resume");
   });
 
-  it("Reviewer が claude の場合、claude フラグに --no-session-persistence が含まれる", async () => {
+  it("Reviewer が claude の場合、claude フラグに --resume が含まれ --no-session-persistence は含まれない", async () => {
     mockCheckCapabilities.mockResolvedValue({ supported: true, missingFlags: [] });
 
     await validateProviderCapabilities(false, undefined, {
@@ -142,7 +142,7 @@ describe("validateProviderCapabilities", () => {
 
     const claudeCall = mockCheckCapabilities.mock.calls.find(c => c[0] === "claude");
     expect(claudeCall).toBeDefined();
-    expect(claudeCall![2]).toContain("--no-session-persistence");
+    expect(claudeCall![2]).not.toContain("--no-session-persistence");
     expect(claudeCall![2]).toContain("--resume");
   });
 });

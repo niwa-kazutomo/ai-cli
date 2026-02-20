@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { CodexReviewer, extractCodexResponse, extractCodexSessionId, buildSummaryContext } from "../../src/providers/codex-reviewer.js";
+import { CodexReviewer, extractCodexResponse, extractCodexSessionId, buildSummaryContext, buildCodeReviewSummaryContext } from "../../src/providers/codex-reviewer.js";
 
 vi.mock("../../src/cli-runner.js", () => ({
   runCli: vi.fn(),
@@ -355,5 +355,120 @@ describe("CodexReviewer reviewCode streaming", () => {
     const callArgs = mockRunCli.mock.calls[0][1].args;
     expect(callArgs).toContain("danger-full-access");
     expect(callArgs).not.toContain("workspace-write");
+  });
+
+  it("2回目以降でセッション ID がある場合は resume を使う", async () => {
+    // 1回目: セッション ID 取得
+    mockRunCli.mockImplementation(async (_cmd, opts) => {
+      const line1 = JSON.stringify({ type: "thread.started", thread_id: "code-sess-1" }) + "\n";
+      const line2 = JSON.stringify({ type: "item.completed", item: { id: "item_1", type: "agent_message", text: "review" } }) + "\n";
+      opts.onStdout?.(line1 + line2);
+      return { exitCode: 0, stdout: line1 + line2, stderr: "" };
+    });
+
+    const reviewer = new CodexReviewer({
+      cwd: "/tmp",
+      streaming: true,
+      onStdout: () => {},
+    });
+    await reviewer.reviewCode("first review");
+
+    // 2回目: resume を使う
+    mockRunCli.mockImplementation(async (_cmd, opts) => {
+      const line = JSON.stringify({ type: "item.completed", item: { id: "item_1", type: "agent_message", text: "resumed review" } }) + "\n";
+      opts.onStdout?.(line);
+      return { exitCode: 0, stdout: line, stderr: "" };
+    });
+    await reviewer.reviewCode("second review", {
+      diffSummary: "diff",
+      reviewSummary: "review",
+    });
+
+    const secondArgs = mockRunCli.mock.calls[1][1].args as string[];
+    expect(secondArgs).toContain("resume");
+    expect(secondArgs).toContain("code-sess-1");
+  });
+
+  it("セッション ID 抽出失敗時に fallbackContext を使用する", async () => {
+    // 1回目: セッション ID 抽出失敗
+    mockRunCli.mockResolvedValue({
+      exitCode: 0,
+      stdout: JSON.stringify({ type: "item.completed", item: { id: "item_1", type: "agent_message", text: "ok" } }),
+      stderr: "",
+    });
+
+    const reviewer = new CodexReviewer({ cwd: "/tmp" });
+    await reviewer.reviewCode("first");
+
+    // 2回目: fallbackContext 付き
+    mockRunCli.mockResolvedValue({
+      exitCode: 0,
+      stdout: JSON.stringify({ type: "item.completed", item: { id: "item_1", type: "agent_message", text: "ok" } }),
+      stderr: "",
+    });
+    await reviewer.reviewCode("second", {
+      diffSummary: "diff summary",
+      reviewSummary: "review summary",
+    });
+
+    // prompt に fallbackContext が含まれる
+    const secondArgs = mockRunCli.mock.calls[1][1].args as string[];
+    const prompt = secondArgs[secondArgs.length - 1];
+    expect(prompt).toContain("前回の差分要約");
+    expect(prompt).toContain("diff summary");
+    expect(prompt).toContain("前回のレビュー要約");
+    expect(prompt).toContain("review summary");
+  });
+
+  it("1回目抽出失敗→2回目抽出成功→3回目で resume 使用", async () => {
+    // 1回目: セッション ID 抽出失敗
+    mockRunCli.mockResolvedValue({
+      exitCode: 0,
+      stdout: JSON.stringify({ type: "item.completed", item: { id: "item_1", type: "agent_message", text: "ok" } }),
+      stderr: "",
+    });
+
+    const reviewer = new CodexReviewer({ cwd: "/tmp" });
+    await reviewer.reviewCode("first");
+
+    // 2回目: セッション ID 抽出成功
+    mockRunCli.mockResolvedValue({
+      exitCode: 0,
+      stdout: [
+        JSON.stringify({ type: "thread.started", thread_id: "code-sess-late" }),
+        JSON.stringify({ type: "item.completed", item: { id: "item_1", type: "agent_message", text: "ok" } }),
+      ].join("\n"),
+      stderr: "",
+    });
+    await reviewer.reviewCode("second", {
+      diffSummary: "diff",
+      reviewSummary: "review",
+    });
+
+    // 3回目: resume を使う
+    mockRunCli.mockResolvedValue({
+      exitCode: 0,
+      stdout: JSON.stringify({ type: "item.completed", item: { id: "item_1", type: "agent_message", text: "resumed" } }),
+      stderr: "",
+    });
+    await reviewer.reviewCode("third", {
+      diffSummary: "diff2",
+      reviewSummary: "review2",
+    });
+
+    const thirdArgs = mockRunCli.mock.calls[2][1].args as string[];
+    expect(thirdArgs).toContain("resume");
+    expect(thirdArgs).toContain("code-sess-late");
+  });
+});
+
+describe("buildCodeReviewSummaryContext", () => {
+  it("コードレビュー用要約コンテキストを正しく構築する", () => {
+    const result = buildCodeReviewSummaryContext("差分の内容", "レビューの内容");
+
+    expect(result).toContain("前回の差分要約");
+    expect(result).toContain("差分の内容");
+    expect(result).toContain("前回のレビュー要約");
+    expect(result).toContain("レビューの内容");
   });
 });

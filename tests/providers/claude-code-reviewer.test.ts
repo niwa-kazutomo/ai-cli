@@ -308,7 +308,7 @@ describe("ClaudeCodeReviewer reviewCode", () => {
     vi.clearAllMocks();
   });
 
-  it("reviewCode で --no-session-persistence が引数に含まれる", async () => {
+  it("reviewCode で --no-session-persistence が引数に含まれない", async () => {
     mockRunCli.mockResolvedValue({
       exitCode: 0,
       stdout: JSON.stringify({ result: "code review" }),
@@ -322,7 +322,7 @@ describe("ClaudeCodeReviewer reviewCode", () => {
     expect(calledArgs).toContain("--print");
     expect(calledArgs).toContain("--output-format");
     expect(calledArgs).toContain("json");
-    expect(calledArgs).toContain("--no-session-persistence");
+    expect(calledArgs).not.toContain("--no-session-persistence");
   });
 
   it("reviewCode で exit code 非ゼロ時にエラーを投げる", async () => {
@@ -375,7 +375,7 @@ describe("ClaudeCodeReviewer reviewCode", () => {
     expect(result.response).toBe("Code looks good");
     const calledArgs = mockRunCli.mock.calls[0][1].args as string[];
     expect(calledArgs).toContain("stream-json");
-    expect(calledArgs).toContain("--no-session-persistence");
+    expect(calledArgs).not.toContain("--no-session-persistence");
   });
 
   it("reviewCode streaming: false で raw stdout からレスポンスを抽出する", async () => {
@@ -389,5 +389,137 @@ describe("ClaudeCodeReviewer reviewCode", () => {
     const result = await reviewer.reviewCode("review prompt");
 
     expect(result.response).toBe("Code review result");
+  });
+
+  it("2回目以降でセッション ID がある場合は --resume を使う", async () => {
+    // 1回目: セッション ID 取得
+    mockRunCli.mockResolvedValue({
+      exitCode: 0,
+      stdout: JSON.stringify({ session_id: "code-sess-1", result: "first review" }),
+      stderr: "",
+    });
+
+    const reviewer = new ClaudeCodeReviewer({ cwd: "/tmp" });
+    await reviewer.reviewCode("first");
+
+    // 2回目: --resume を使う
+    mockRunCli.mockResolvedValue({
+      exitCode: 0,
+      stdout: JSON.stringify({ session_id: "code-sess-1", result: "second review" }),
+      stderr: "",
+    });
+    await reviewer.reviewCode("second", {
+      diffSummary: "diff",
+      reviewSummary: "review",
+    });
+
+    const secondArgs = mockRunCli.mock.calls[1][1].args as string[];
+    expect(secondArgs).toContain("--resume");
+    expect(secondArgs).toContain("code-sess-1");
+  });
+
+  it("セッション ID 抽出失敗時に fallbackContext を使用する", async () => {
+    // 1回目: session_id なし → 抽出失敗
+    mockRunCli.mockResolvedValue({
+      exitCode: 0,
+      stdout: JSON.stringify({ result: "review without session_id" }),
+      stderr: "",
+    });
+
+    const reviewer = new ClaudeCodeReviewer({ cwd: "/tmp" });
+    await reviewer.reviewCode("first");
+
+    // 2回目: fallbackContext 付き
+    mockRunCli.mockResolvedValue({
+      exitCode: 0,
+      stdout: JSON.stringify({ result: "second review" }),
+      stderr: "",
+    });
+    await reviewer.reviewCode("second", {
+      diffSummary: "diff summary",
+      reviewSummary: "review summary",
+    });
+
+    // prompt に fallbackContext が含まれる
+    const secondArgs = mockRunCli.mock.calls[1][1].args as string[];
+    const prompt = secondArgs[secondArgs.length - 1];
+    expect(prompt).toContain("前回の差分要約");
+    expect(prompt).toContain("diff summary");
+    expect(prompt).toContain("前回のレビュー要約");
+    expect(prompt).toContain("review summary");
+  });
+
+  it("1回目抽出失敗→2回目抽出成功→3回目で --resume 使用", async () => {
+    // 1回目: session_id なし
+    mockRunCli.mockResolvedValue({
+      exitCode: 0,
+      stdout: JSON.stringify({ result: "review" }),
+      stderr: "",
+    });
+
+    const reviewer = new ClaudeCodeReviewer({ cwd: "/tmp" });
+    await reviewer.reviewCode("first");
+
+    // 2回目: session_id あり → 抽出成功
+    mockRunCli.mockResolvedValue({
+      exitCode: 0,
+      stdout: JSON.stringify({ session_id: "code-sess-late", result: "review" }),
+      stderr: "",
+    });
+    await reviewer.reviewCode("second", {
+      diffSummary: "diff",
+      reviewSummary: "review",
+    });
+
+    // 3回目: --resume を使う
+    mockRunCli.mockResolvedValue({
+      exitCode: 0,
+      stdout: JSON.stringify({ session_id: "code-sess-late", result: "resumed" }),
+      stderr: "",
+    });
+    await reviewer.reviewCode("third", {
+      diffSummary: "diff2",
+      reviewSummary: "review2",
+    });
+
+    const thirdArgs = mockRunCli.mock.calls[2][1].args as string[];
+    expect(thirdArgs).toContain("--resume");
+    expect(thirdArgs).toContain("code-sess-late");
+  });
+
+  it("reviewCode のストリーミングで session_id を抽出し 2回目で --resume を使う", async () => {
+    // 1回目: ストリーミングで session_id 取得
+    mockRunCli.mockImplementation(async (_cmd, opts) => {
+      const events = [
+        '{"type":"system","session_id":"code-stream-sess"}\n',
+        '{"type":"result","result":"first code review","session_id":"code-stream-sess"}\n',
+      ];
+      for (const event of events) {
+        opts.onStdout?.(event);
+      }
+      return { exitCode: 0, stdout: "", stderr: "" };
+    });
+
+    const reviewer = new ClaudeCodeReviewer({ cwd: "/tmp", streaming: true });
+    await reviewer.reviewCode("first");
+
+    // 2回目: --resume を使う
+    mockRunCli.mockImplementation(async (_cmd, opts) => {
+      const events = [
+        '{"type":"result","result":"second code review","session_id":"code-stream-sess"}\n',
+      ];
+      for (const event of events) {
+        opts.onStdout?.(event);
+      }
+      return { exitCode: 0, stdout: "", stderr: "" };
+    });
+    await reviewer.reviewCode("second", {
+      diffSummary: "diff",
+      reviewSummary: "review",
+    });
+
+    const secondArgs = mockRunCli.mock.calls[1][1].args as string[];
+    expect(secondArgs).toContain("--resume");
+    expect(secondArgs).toContain("code-stream-sess");
   });
 });

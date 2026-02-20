@@ -8,7 +8,7 @@ import {
   type StreamJsonEvent,
 } from "../stream-json-parser.js";
 import { extractResponse, extractSessionId } from "./claude-code-generator.js";
-import { buildSummaryContext } from "./codex-reviewer.js";
+import { buildSummaryContext, buildCodeReviewSummaryContext } from "./codex-reviewer.js";
 import * as logger from "../logger.js";
 
 export interface ClaudeCodeReviewerConfig {
@@ -21,6 +21,7 @@ export interface ClaudeCodeReviewerConfig {
 
 export class ClaudeCodeReviewer implements Reviewer {
   private sessionId: string | null = null;
+  private codeReviewSessionId: string | null = null;
   private firstRun = true;
   private readonly config: ClaudeCodeReviewerConfig;
 
@@ -82,13 +83,25 @@ export class ClaudeCodeReviewer implements Reviewer {
     return { response, raw: result };
   }
 
-  async reviewCode(prompt: string): Promise<ProviderResult> {
+  async reviewCode(
+    prompt: string,
+    fallbackContext?: { diffSummary: string; reviewSummary: string },
+  ): Promise<ProviderResult> {
     const args = [
       "--print",
       "--output-format",
       "json",
-      "--no-session-persistence",
     ];
+
+    if (this.codeReviewSessionId) {
+      args.push("--resume", this.codeReviewSessionId);
+    } else if (fallbackContext) {
+      const context = buildCodeReviewSummaryContext(
+        fallbackContext.diffSummary,
+        fallbackContext.reviewSummary,
+      );
+      prompt = `${context}\n\n${prompt}`;
+    }
 
     if (this.config.model) {
       args.push("--model", this.config.model);
@@ -102,6 +115,17 @@ export class ClaudeCodeReviewer implements Reviewer {
       throw new Error(
         `Claude Code のコードレビューが失敗しました (exit code: ${result.exitCode})\n${result.stderr}`,
       );
+    }
+
+    // セッション ID 未取得なら毎回抽出を試行
+    if (!this.codeReviewSessionId) {
+      const sid = streamResult?.sessionId ?? extractSessionId(result.stdout);
+      if (sid) {
+        this.codeReviewSessionId = sid;
+        logger.debug(`Claude コードレビューセッション ID 抽出成功: ${sid}`);
+      } else {
+        logger.verbose("Claude コードレビューセッション ID の抽出に失敗しました。フォールバックモードで継続します。");
+      }
     }
 
     const response = streamResult?.response ?? extractResponse(result.stdout);

@@ -1174,6 +1174,96 @@ describe("orchestrator", () => {
     expect(mockCheckClaudeStreamingCapability).not.toHaveBeenCalled();
   });
 
+  it("コードレビュー2回目以降で CODE_REVIEW_CONTINUATION と前回懸念が使用される", async () => {
+    mockGenerator.generatePlan.mockResolvedValue({
+      response: "Plan",
+      raw: { exitCode: 0, stdout: "", stderr: "" },
+    });
+
+    mockReviewer.reviewPlan.mockResolvedValue({
+      response: "Looks good",
+      raw: { exitCode: 0, stdout: "", stderr: "" },
+    });
+
+    mockUi.promptPlanApproval.mockResolvedValue({ action: "approve" });
+
+    mockGenerator.generateCode.mockResolvedValue({
+      response: "Code",
+      raw: { exitCode: 0, stdout: "", stderr: "" },
+    });
+
+    mockReviewer.reviewCode.mockResolvedValue({
+      response: "Code review output",
+      raw: { exitCode: 0, stdout: "", stderr: "" },
+    });
+
+    // plan review: no concerns
+    // 1st code review: concerns, 2nd: no concerns
+    mockJudge.judgeReview
+      .mockResolvedValueOnce(makeJudgment(false))
+      .mockResolvedValueOnce(
+        makeJudgment(true, [{ severity: "P2", description: "Fix null check" }]),
+      )
+      .mockResolvedValueOnce(makeJudgment(false));
+
+    await runWorkflow(defaultOptions);
+
+    // 2回目の reviewCode は CODE_REVIEW_CONTINUATION テンプレートで呼ばれる
+    expect(mockReviewer.reviewCode).toHaveBeenCalledTimes(2);
+    const secondCodeReviewPrompt = mockReviewer.reviewCode.mock.calls[1][0] as string;
+    expect(secondCodeReviewPrompt).toContain("前回の指摘事項");
+    expect(secondCodeReviewPrompt).toContain("Fix null check");
+    expect(secondCodeReviewPrompt).toContain("前回のレビュー指摘事項に基づいてコードが修正されました");
+  });
+
+  it("コードレビュー2回目以降で fallbackContext に diffSummary/reviewSummary が渡される", async () => {
+    mockGenerator.generatePlan.mockResolvedValue({
+      response: "Plan",
+      raw: { exitCode: 0, stdout: "", stderr: "" },
+    });
+
+    mockReviewer.reviewPlan.mockResolvedValue({
+      response: "Looks good",
+      raw: { exitCode: 0, stdout: "", stderr: "" },
+    });
+
+    mockUi.promptPlanApproval.mockResolvedValue({ action: "approve" });
+
+    mockGenerator.generateCode.mockResolvedValue({
+      response: "Code",
+      raw: { exitCode: 0, stdout: "", stderr: "" },
+    });
+
+    const codeReviewResponse = "Code review with concerns details";
+    mockReviewer.reviewCode.mockResolvedValue({
+      response: codeReviewResponse,
+      raw: { exitCode: 0, stdout: "", stderr: "" },
+    });
+
+    mockGitUtils.getGitDiff.mockResolvedValue("mock diff content for test");
+
+    // plan review: no concerns
+    // 1st code review: concerns, 2nd: no concerns
+    mockJudge.judgeReview
+      .mockResolvedValueOnce(makeJudgment(false))
+      .mockResolvedValueOnce(
+        makeJudgment(true, [{ severity: "P3", description: "Minor issue" }]),
+      )
+      .mockResolvedValueOnce(makeJudgment(false));
+
+    await runWorkflow(defaultOptions);
+
+    // 初回: fallbackContext は undefined
+    expect(mockReviewer.reviewCode.mock.calls[0][1]).toBeUndefined();
+    // 2回目: fallbackContext が渡される
+    expect(mockReviewer.reviewCode.mock.calls[1][1]).toEqual(
+      expect.objectContaining({
+        diffSummary: expect.any(String),
+        reviewSummary: expect.any(String),
+      }),
+    );
+  });
+
   it("fallbackContext が常に渡される（2回目以降のレビュー時）", async () => {
     mockGenerator.generatePlan.mockResolvedValue({
       response: "Plan",

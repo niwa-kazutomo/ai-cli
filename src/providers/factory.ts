@@ -120,7 +120,7 @@ export async function validateProviderCapabilities(
     if (dangerous) claudeFlags.add("--dangerously-skip-permissions");
   }
   if (rev === "claude") {
-    ["--print", "--output-format", "--resume", "--no-session-persistence"].forEach(f => claudeFlags.add(f));
+    ["--print", "--output-format", "--resume"].forEach(f => claudeFlags.add(f));
   }
   if (jud === "claude") {
     ["--print", "--no-session-persistence"].forEach(f => claudeFlags.add(f));
