@@ -448,18 +448,18 @@ describe("formatActiveOptions", () => {
     expect(result).toBeNull();
   });
 
-  it("--judge-cli codex（デフォルト以外）→ 表示される", () => {
-    const result = formatActiveOptions({
-      ...baseOptions,
-      judgeCli: "codex",
-    });
-    expect(result).toBe("⚙ オプション: --judge-cli codex");
-  });
-
-  it("--judge-cli claude（デフォルト値）→ null を返す", () => {
+  it("--judge-cli claude（デフォルト以外）→ 表示される", () => {
     const result = formatActiveOptions({
       ...baseOptions,
       judgeCli: "claude",
+    });
+    expect(result).toBe("⚙ オプション: --judge-cli claude");
+  });
+
+  it("--judge-cli codex（デフォルト値）→ null を返す", () => {
+    const result = formatActiveOptions({
+      ...baseOptions,
+      judgeCli: "codex",
     });
     expect(result).toBeNull();
   });

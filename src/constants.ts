@@ -24,7 +24,7 @@ export const DEFAULT_MAX_CODE_ITERATIONS = 10;
 
 export const DEFAULT_GENERATOR_CLI = "claude" as const;
 export const DEFAULT_REVIEWER_CLI = "codex" as const;
-export const DEFAULT_JUDGE_CLI = "claude" as const;
+export const DEFAULT_JUDGE_CLI = "codex" as const;
 export const BLOCKER_SEVERITIES = new Set(["P0", "P1", "P2", "P3"]);
 
 export const PROMPTS = {
