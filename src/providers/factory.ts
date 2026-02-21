@@ -1,4 +1,5 @@
 import { checkCapabilities } from "../cli-runner.js";
+import { DEFAULT_GENERATOR_CLI, DEFAULT_REVIEWER_CLI, DEFAULT_JUDGE_CLI } from "../constants.js";
 import type { CliChoice, CodexSandboxMode } from "../types.js";
 import type { Generator, Reviewer, Judge } from "./types.js";
 import type { CliBackend } from "./backend.js";
@@ -30,9 +31,9 @@ export interface Providers {
 }
 
 export function createProviders(config: ProviderConfig): Providers {
-  const genCli = config.generatorCli ?? "claude";
-  const revCli = config.reviewerCli ?? "codex";
-  const judCli = config.judgeCli ?? "claude";
+  const genCli = config.generatorCli ?? DEFAULT_GENERATOR_CLI;
+  const revCli = config.reviewerCli ?? DEFAULT_REVIEWER_CLI;
+  const judCli = config.judgeCli ?? DEFAULT_JUDGE_CLI;
 
   const canStreamClaude = config.streaming && config.canStreamClaude;
 
@@ -87,9 +88,9 @@ export async function validateProviderCapabilities(
   cwd?: string,
   selections?: { generatorCli?: CliChoice; reviewerCli?: CliChoice; judgeCli?: CliChoice },
 ): Promise<string | null> {
-  const gen = selections?.generatorCli ?? "claude";
-  const rev = selections?.reviewerCli ?? "codex";
-  const jud = selections?.judgeCli ?? "claude";
+  const gen = selections?.generatorCli ?? DEFAULT_GENERATOR_CLI;
+  const rev = selections?.reviewerCli ?? DEFAULT_REVIEWER_CLI;
+  const jud = selections?.judgeCli ?? DEFAULT_JUDGE_CLI;
 
   // Claude: ロール別に必要フラグを集約
   const claudeFlags = new Set<string>();
