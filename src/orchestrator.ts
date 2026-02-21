@@ -2,7 +2,7 @@ import { createProviders, validateProviderCapabilities, checkClaudeStreamingCapa
 import type { Generator, Reviewer, Judge, ProviderResult } from "./providers/types.js";
 import { checkGitRepo, checkGitChanges, getGitDiff } from "./git-utils.js";
 import * as ui from "./user-interaction.js";
-import { PROMPTS, MESSAGES } from "./constants.js";
+import { PROMPTS, MESSAGES, truncateMiddle } from "./constants.js";
 import type { OrchestratorOptions, PlanApprovalResult, ReviewJudgment } from "./types.js";
 import * as logger from "./logger.js";
 
@@ -225,10 +225,11 @@ export async function runWorkflow(options: OrchestratorOptions): Promise<void> {
 
       // Step 2.5: Judge review
       ui.display("⚖️ Step 2.5: レビュー判定中...");
+      const planContext = truncateMiddle(currentPlan, 8000);
       const judgment: ReviewJudgment = await runWithProgress(
         shouldStream,
         "レビュー判定中...",
-        () => judge.judgeReview(reviewOutput),
+        () => judge.judgeReview(reviewOutput, planContext),
       );
       lastPlanJudgment = judgment;
 
@@ -442,8 +443,9 @@ export async function runWorkflow(options: OrchestratorOptions): Promise<void> {
 
     // Step 5.5: Judge code review
     ui.display("⚖️ Step 5.5: コードレビュー判定中...");
+    const codeContext = truncateMiddle(currentPlan + "\n\n## コード変更（diff）\n" + gitDiff, 8000);
     const codeJudgment: ReviewJudgment = await runWithProgress(shouldStream, "コードレビュー判定中...", () =>
-      judge.judgeReview(codeReviewOutput),
+      judge.judgeReview(codeReviewOutput, codeContext),
     );
     lastCodeJudgment = codeJudgment;
 

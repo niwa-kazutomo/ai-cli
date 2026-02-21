@@ -20,8 +20,8 @@ export class JudgeImpl implements Judge {
     this.backend = backend;
   }
 
-  async judgeReview(reviewOutput: string): Promise<ReviewJudgment> {
-    const prompt = PROMPTS.REVIEW_JUDGMENT(reviewOutput);
+  async judgeReview(reviewOutput: string, context?: string): Promise<ReviewJudgment> {
+    const prompt = PROMPTS.REVIEW_JUDGMENT(reviewOutput, context);
 
     // fail-safe 1: backend.run() 例外 → 安全側
     let result: BackendRunResult;

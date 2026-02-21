@@ -25,5 +25,5 @@ export interface Reviewer {
 }
 
 export interface Judge {
-  judgeReview(reviewOutput: string): Promise<ReviewJudgment>;
+  judgeReview(reviewOutput: string, context?: string): Promise<ReviewJudgment>;
 }

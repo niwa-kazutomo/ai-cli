@@ -178,6 +178,33 @@ describe("JudgeImpl", () => {
     expect(result.concerns[0].severity).toBe("P0");
   });
 
+  it("context が渡された場合、プロンプトに「レビュー対象（参考）」セクションが含まれる", async () => {
+    const run = vi.fn().mockResolvedValue(makeResult({
+      response: "### 概要\n問題なし\n\n### 懸念事項\n懸念事項なし",
+    }));
+    const backend = createMockBackend(run);
+    const judge = new JudgeImpl(backend);
+
+    await judge.judgeReview("review output", "計画のコンテキスト");
+
+    const prompt = run.mock.calls[0][0].prompt as string;
+    expect(prompt).toContain("レビュー対象（参考）");
+    expect(prompt).toContain("計画のコンテキスト");
+  });
+
+  it("context が undefined の場合、プロンプトに「レビュー対象（参考）」セクションが含まれない", async () => {
+    const run = vi.fn().mockResolvedValue(makeResult({
+      response: "### 概要\n問題なし\n\n### 懸念事項\n懸念事項なし",
+    }));
+    const backend = createMockBackend(run);
+    const judge = new JudgeImpl(backend);
+
+    await judge.judgeReview("review output");
+
+    const prompt = run.mock.calls[0][0].prompt as string;
+    expect(prompt).not.toContain("レビュー対象（参考）");
+  });
+
   it("「懸念事項なし」+「レビュー不能」混在時に fail-safe になる", async () => {
     const run = vi.fn().mockResolvedValue(makeResult({
       response: "懸念事項なし\nレビュー対象がありません",

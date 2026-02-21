@@ -1177,6 +1177,67 @@ describe("orchestrator", () => {
     expect(mockCheckClaudeStreamingCapability).not.toHaveBeenCalled();
   });
 
+  it("plan review judge にプランコンテキストが渡される", async () => {
+    const planText = "Test plan for judge context";
+
+    mockGenerator.generatePlan.mockResolvedValue({
+      response: planText,
+      raw: { exitCode: 0, stdout: "", stderr: "" },
+    });
+    mockReviewer.reviewPlan.mockResolvedValue({
+      response: "Looks good",
+      raw: { exitCode: 0, stdout: "", stderr: "" },
+    });
+    mockJudge.judgeReview.mockResolvedValue(makeJudgment(false));
+    mockUi.promptPlanApproval.mockResolvedValue({ action: "approve" });
+    mockGenerator.generateCode.mockResolvedValue({
+      response: "Code",
+      raw: { exitCode: 0, stdout: "", stderr: "" },
+    });
+    mockReviewer.reviewCode.mockResolvedValue({
+      response: "LGTM",
+      raw: { exitCode: 0, stdout: "", stderr: "" },
+    });
+
+    await runWorkflow(defaultOptions);
+
+    // plan review judge (1st call) にプランコンテキストが渡されること
+    expect(mockJudge.judgeReview.mock.calls[0][1]).toContain(planText);
+  });
+
+  it("code review judge にプラン+diff コンテキストが渡される", async () => {
+    const planText = "Plan for code judge";
+    const diffText = "diff --git a/file.ts b/file.ts";
+
+    mockGenerator.generatePlan.mockResolvedValue({
+      response: planText,
+      raw: { exitCode: 0, stdout: "", stderr: "" },
+    });
+    mockReviewer.reviewPlan.mockResolvedValue({
+      response: "Looks good",
+      raw: { exitCode: 0, stdout: "", stderr: "" },
+    });
+    mockJudge.judgeReview.mockResolvedValue(makeJudgment(false));
+    mockUi.promptPlanApproval.mockResolvedValue({ action: "approve" });
+    mockGenerator.generateCode.mockResolvedValue({
+      response: "Code",
+      raw: { exitCode: 0, stdout: "", stderr: "" },
+    });
+    mockGitUtils.getGitDiff.mockResolvedValue(diffText);
+    mockReviewer.reviewCode.mockResolvedValue({
+      response: "LGTM",
+      raw: { exitCode: 0, stdout: "", stderr: "" },
+    });
+
+    await runWorkflow(defaultOptions);
+
+    // code review judge (2nd call) にプラン+diff コンテキストが渡されること
+    const codeJudgeContext = mockJudge.judgeReview.mock.calls[1][1] as string;
+    expect(codeJudgeContext).toContain(planText);
+    expect(codeJudgeContext).toContain(diffText);
+    expect(codeJudgeContext).toContain("コード変更（diff）");
+  });
+
   it("コードレビュー2回目以降で CODE_REVIEW_CONTINUATION と前回懸念が使用される", async () => {
     mockGenerator.generatePlan.mockResolvedValue({
       response: "Plan",

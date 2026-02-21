@@ -11,7 +11,7 @@ export const DEFAULT_TIMEOUT_MS = 30 * 60 * 1000; // 30 minutes
 
 const TRUNCATE_SEPARATOR = "\n...(中略)...\n";
 
-function truncateMiddle(text: string, maxLen: number): string {
+export function truncateMiddle(text: string, maxLen: number): string {
   if (text.length <= maxLen) return text;
   const available = maxLen - TRUNCATE_SEPARATOR.length;
   if (available <= 0) return text.slice(0, maxLen);
@@ -117,8 +117,8 @@ ${diff}
   PLAN_USER_REVISION_SLIM: (instruction: string) =>
     `ユーザーから以下の修正指示がありました。指示に基づいて計画を修正してください。コードは書かず、修正後の計画を最初から最後まで省略せずに全文出力してください。変更箇所の差分だけでなく、計画全体を出力してください。\n\n## ユーザーの修正指示\n${instruction}`,
 
-  REVIEW_JUDGMENT: (reviewOutput: string) =>
-    `あなたはコードレビュー判定の専門家です。以下のレビュー結果を分析し、下記のフォーマットで出力してください。
+  REVIEW_JUDGMENT: (reviewOutput: string, context?: string) => {
+    let prompt = `あなたはコードレビュー判定の専門家です。以下のレビュー結果を分析し、下記のフォーマットで出力してください。
 
 ## 出力フォーマット（厳守）
 
@@ -144,7 +144,12 @@ ${diff}
 - レビュー対象が不在（コード変更なし、計画内容なし等）の場合は「- [P0] レビュー対象が含まれていません」と出力してください
 
 ## レビュー結果
-${reviewOutput}`,
+${reviewOutput}`;
+    if (context) {
+      prompt += `\n\n## レビュー対象（参考）\n${context}`;
+    }
+    return prompt;
+  },
 } as const;
 
 export const MESSAGES = {
