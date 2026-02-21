@@ -91,6 +91,10 @@ describe("orchestrator", () => {
     mockGitUtils.checkGitChanges.mockResolvedValue(true);
     mockGitUtils.getGitDiff.mockResolvedValue("mock diff content");
     mockUi.startProgress.mockImplementation(() => ({ stop: vi.fn() }));
+    // clearAllMocks はモック実装をリセットしないため、明示的にデフォルト値を再設定
+    mockGenerator.hasActiveSession.mockReturnValue(false);
+    mockReviewer.hasPlanSession.mockReturnValue(false);
+    mockReviewer.hasCodeReviewSession.mockReturnValue(false);
   });
 
   it("懸念なしでワークフローが正常完了する", async () => {
@@ -1236,6 +1240,104 @@ describe("orchestrator", () => {
     expect(codeJudgeContext).toContain(planText);
     expect(codeJudgeContext).toContain(diffText);
     expect(codeJudgeContext).toContain("コード変更（diff）");
+  });
+
+  it("hasPlanSession()=true の SLIM パスでも2回目のプランレビューに修正後プラン本文が含まれる", async () => {
+    const revisedPlan = "Revised plan via SLIM path";
+
+    mockReviewer.hasPlanSession.mockReturnValue(true);
+
+    mockGenerator.generatePlan
+      .mockResolvedValueOnce({
+        response: "Initial plan",
+        raw: { exitCode: 0, stdout: "", stderr: "" },
+      })
+      .mockResolvedValueOnce({
+        response: revisedPlan,
+        raw: { exitCode: 0, stdout: "", stderr: "" },
+      });
+
+    mockReviewer.reviewPlan.mockResolvedValue({
+      response: "Review",
+      raw: { exitCode: 0, stdout: "", stderr: "" },
+    });
+
+    // First review: concerns, second: no concerns
+    mockJudge.judgeReview
+      .mockResolvedValueOnce(
+        makeJudgment(true, [{ severity: "P2", description: "Fix this" }]),
+      )
+      .mockResolvedValueOnce(makeJudgment(false))
+      // code review: no concerns
+      .mockResolvedValueOnce(makeJudgment(false));
+
+    mockUi.promptPlanApproval.mockResolvedValue({ action: "approve" });
+
+    mockGenerator.generateCode.mockResolvedValue({
+      response: "Code",
+      raw: { exitCode: 0, stdout: "", stderr: "" },
+    });
+
+    mockReviewer.reviewCode.mockResolvedValue({
+      response: "LGTM",
+      raw: { exitCode: 0, stdout: "", stderr: "" },
+    });
+
+    await runWorkflow(defaultOptions);
+
+    // 2回目の reviewPlan の prompt 引数に修正後プラン本文が含まれること（SLIM パス）
+    const secondReviewPrompt = mockReviewer.reviewPlan.mock.calls[1][0] as string;
+    expect(secondReviewPrompt).toContain(revisedPlan);
+    expect(secondReviewPrompt).toContain("修正後の計画");
+    // 初回プランテキストではないことも確認
+    expect(secondReviewPrompt).not.toContain("Initial plan");
+  });
+
+  it("hasCodeReviewSession()=true の SLIM パスでもコードレビューに実装計画が含まれる", async () => {
+    const planText = "Plan for SLIM code review";
+
+    mockReviewer.hasCodeReviewSession.mockReturnValue(true);
+
+    mockGenerator.generatePlan.mockResolvedValue({
+      response: planText,
+      raw: { exitCode: 0, stdout: "", stderr: "" },
+    });
+
+    mockReviewer.reviewPlan.mockResolvedValue({
+      response: "Looks good",
+      raw: { exitCode: 0, stdout: "", stderr: "" },
+    });
+
+    mockUi.promptPlanApproval.mockResolvedValue({ action: "approve" });
+
+    mockGenerator.generateCode.mockResolvedValue({
+      response: "Code",
+      raw: { exitCode: 0, stdout: "", stderr: "" },
+    });
+
+    mockReviewer.reviewCode.mockResolvedValue({
+      response: "Code review output",
+      raw: { exitCode: 0, stdout: "", stderr: "" },
+    });
+
+    // plan review: no concerns
+    // 1st code review: concerns, 2nd: no concerns
+    mockJudge.judgeReview
+      .mockResolvedValueOnce(makeJudgment(false))
+      .mockResolvedValueOnce(
+        makeJudgment(true, [{ severity: "P2", description: "Fix null check" }]),
+      )
+      .mockResolvedValueOnce(makeJudgment(false));
+
+    await runWorkflow(defaultOptions);
+
+    // 2回目の reviewCode（SLIM パス）に実装計画が含まれること
+    expect(mockReviewer.reviewCode).toHaveBeenCalledTimes(2);
+    const secondCodeReviewPrompt = mockReviewer.reviewCode.mock.calls[1][0] as string;
+    expect(secondCodeReviewPrompt).toContain(planText);
+    expect(secondCodeReviewPrompt).toContain("実装計画");
+    // 前回の懸念事項も含まれること
+    expect(secondCodeReviewPrompt).toContain("Fix null check");
   });
 
   it("コードレビュー2回目以降で CODE_REVIEW_CONTINUATION と前回懸念が使用される", async () => {

@@ -100,11 +100,11 @@ ${diff}
 
   // --- セッション有効時のスリムバリアント（計画全文を省略） ---
 
-  PLAN_REVIEW_CONTINUATION_SLIM: (concerns: string) =>
-    `前回のレビュー指摘事項に基づいて計画が修正されました。修正後の計画を再レビューしてください。\n特に前回の指摘事項が適切に対処されているか確認してください。\n\n## 前回の指摘事項\n${concerns}`,
+  PLAN_REVIEW_CONTINUATION_SLIM: (concerns: string, plan: string) =>
+    `前回のレビュー指摘事項に基づいて計画が修正されました。修正後の計画を再レビューしてください。\n特に前回の指摘事項が適切に対処されているか確認してください。\n\n## 修正後の計画\n${plan}\n\n## 前回の指摘事項\n${concerns}`,
 
-  CODE_REVIEW_CONTINUATION_SLIM: (previousConcerns: string, diff: string) =>
-    `前回のコードレビュー指摘事項に基づいてコードが修正されました。\n修正後のコード変更を再レビューしてください。\n特に前回の指摘事項が適切に対処されているか確認してください。\n\n## 重要なルール\n- レビュー対象は「実装計画に関連する変更」のみです。計画に無関係な既存の変更は無視してください。\n- 重大度を P0（致命的）から P4（軽微）で評価してください。\n\n## 前回の指摘事項\n${previousConcerns}\n\n## コード変更（diff）\n\`\`\`diff\n${diff}\n\`\`\``,
+  CODE_REVIEW_CONTINUATION_SLIM: (previousConcerns: string, plan: string, diff: string) =>
+    `前回のコードレビュー指摘事項に基づいてコードが修正されました。\n修正後のコード変更を再レビューしてください。\n特に前回の指摘事項が適切に対処されているか確認してください。\n\n## 重要なルール\n- レビュー対象は「実装計画に関連する変更」のみです。計画に無関係な既存の変更は無視してください。\n- 重大度を P0（致命的）から P4（軽微）で評価してください。\n\n## 前回の指摘事項\n${previousConcerns}\n\n## 実装計画\n${plan}\n\n## コード変更（diff）\n\`\`\`diff\n${diff}\n\`\`\``,
 
   PLAN_REVISION_SLIM: (concerns: string, userAnswers?: string) => {
     let prompt = `以下のレビュー指摘事項に基づいて、計画を修正してください。コードは書かず、修正後の計画を最初から最後まで省略せずに全文出力してください。変更箇所の差分だけでなく、計画全体を出力してください。\n\n## レビュー指摘事項\n${concerns}`;

@@ -205,7 +205,7 @@ export async function runWorkflow(options: OrchestratorOptions): Promise<void> {
         planIteration === 1
           ? PROMPTS.PLAN_REVIEW(currentPlan)
           : reviewer.hasPlanSession()
-            ? PROMPTS.PLAN_REVIEW_CONTINUATION_SLIM(formatConcerns(lastPlanJudgment!))
+            ? PROMPTS.PLAN_REVIEW_CONTINUATION_SLIM(formatConcerns(lastPlanJudgment!), currentPlan)
             : PROMPTS.PLAN_REVIEW_CONTINUATION(formatConcerns(lastPlanJudgment!), currentPlan);
 
       const reviewResult = await runWithProgress(canStreamReviewer, "プランレビュー中...", () =>
@@ -419,7 +419,7 @@ export async function runWorkflow(options: OrchestratorOptions): Promise<void> {
       codeIteration === 1
         ? PROMPTS.CODE_REVIEW(currentPlan, gitDiff)
         : reviewer.hasCodeReviewSession()
-          ? PROMPTS.CODE_REVIEW_CONTINUATION_SLIM(formatConcerns(lastCodeJudgment!), gitDiff)
+          ? PROMPTS.CODE_REVIEW_CONTINUATION_SLIM(formatConcerns(lastCodeJudgment!), currentPlan, gitDiff)
           : PROMPTS.CODE_REVIEW_CONTINUATION(
               formatConcerns(lastCodeJudgment!),
               currentPlan,
