@@ -43,7 +43,7 @@ ai [prompt] [options]
 | `--codex-sandbox <mode>` | string | `workspace-write` | Codex コードレビュー時の sandbox モード |
 | `--generator-cli <cli>` | string | `claude` | Generator の CLI 選択 (`claude` \| `codex`) |
 | `--reviewer-cli <cli>` | string | `codex` | Reviewer の CLI 選択 (`claude` \| `codex`) |
-| `--judge-cli <cli>` | string | `claude` | Judge の CLI 選択 (`claude` \| `codex`) |
+| `--judge-cli <cli>` | string | `codex` | Judge の CLI 選択 (`claude` \| `codex`) |
 | `--dangerous` | flag | `false` | Claude Code 実行時に `--dangerously-skip-permissions` を使用 |
 | `--verbose` | flag | `false` | 詳細ログ出力（要約ベース）・ストリーミング有効化 |
 | `--debug` | flag | `false` | 全文ログ出力（開発用、verbose も有効化） |
