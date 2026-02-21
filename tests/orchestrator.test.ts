@@ -47,10 +47,13 @@ const mockUi = vi.mocked(ui);
 const mockGenerator = {
   generatePlan: vi.fn(),
   generateCode: vi.fn(),
+  hasActiveSession: vi.fn().mockReturnValue(false),
 };
 const mockReviewer = {
   reviewPlan: vi.fn(),
   reviewCode: vi.fn(),
+  hasPlanSession: vi.fn().mockReturnValue(false),
+  hasCodeReviewSession: vi.fn().mockReturnValue(false),
 };
 const mockJudge = {
   judgeReview: vi.fn(),

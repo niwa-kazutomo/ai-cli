@@ -204,7 +204,9 @@ export async function runWorkflow(options: OrchestratorOptions): Promise<void> {
       const reviewPrompt: string =
         planIteration === 1
           ? PROMPTS.PLAN_REVIEW(currentPlan)
-          : PROMPTS.PLAN_REVIEW_CONTINUATION(formatConcerns(lastPlanJudgment!), currentPlan);
+          : reviewer.hasPlanSession()
+            ? PROMPTS.PLAN_REVIEW_CONTINUATION_SLIM(formatConcerns(lastPlanJudgment!))
+            : PROMPTS.PLAN_REVIEW_CONTINUATION(formatConcerns(lastPlanJudgment!), currentPlan);
 
       const reviewResult = await runWithProgress(canStreamReviewer, "プランレビュー中...", () =>
         reviewer.reviewPlan(
@@ -253,11 +255,9 @@ export async function runWorkflow(options: OrchestratorOptions): Promise<void> {
 
       ui.displaySeparator();
       ui.display("🔄 Step 3: プランを修正中...");
-      const revisionPrompt = PROMPTS.PLAN_REVISION(
-        currentPlan,
-        formatConcerns(judgment),
-        userAnswers || undefined,
-      );
+      const revisionPrompt = generator.hasActiveSession()
+        ? PROMPTS.PLAN_REVISION_SLIM(formatConcerns(judgment), userAnswers || undefined)
+        : PROMPTS.PLAN_REVISION(currentPlan, formatConcerns(judgment), userAnswers || undefined);
       planResult = await runWithProgress(canStreamGenerator, "プラン修正中...", () =>
         generator.generatePlan(revisionPrompt),
       );
@@ -324,7 +324,9 @@ export async function runWorkflow(options: OrchestratorOptions): Promise<void> {
     // approval.action === "modify"
     ui.displaySeparator();
     ui.display("🔄 ユーザーの修正指示に基づいてプランを修正中...");
-    const userRevisionPrompt = PROMPTS.PLAN_USER_REVISION(currentPlan, approval.instruction);
+    const userRevisionPrompt = generator.hasActiveSession()
+      ? PROMPTS.PLAN_USER_REVISION_SLIM(approval.instruction)
+      : PROMPTS.PLAN_USER_REVISION(currentPlan, approval.instruction);
     planResult = await runWithProgress(canStreamGenerator, "プラン修正中...", () =>
       generator.generatePlan(userRevisionPrompt),
     );
@@ -390,14 +392,16 @@ export async function runWorkflow(options: OrchestratorOptions): Promise<void> {
     ui.displaySeparator();
     ui.display(`🔎 Step 5: コードレビュー (${codeIteration}/${maxCodeIterations})...`);
 
-    const isGitRepo = await checkGitRepo(cwd);
-    if (!isGitRepo) {
-      throw new Error(MESSAGES.NO_GIT_REPO);
-    }
+    if (codeIteration === 1) {
+      const isGitRepo = await checkGitRepo(cwd);
+      if (!isGitRepo) {
+        throw new Error(MESSAGES.NO_GIT_REPO);
+      }
 
-    const hasChanges = await checkGitChanges(cwd);
-    if (!hasChanges) {
-      throw new Error(MESSAGES.NO_GIT_CHANGES);
+      const hasChanges = await checkGitChanges(cwd);
+      if (!hasChanges) {
+        throw new Error(MESSAGES.NO_GIT_CHANGES);
+      }
     }
 
     // Code review with Codex
@@ -413,11 +417,13 @@ export async function runWorkflow(options: OrchestratorOptions): Promise<void> {
     const codeReviewPrompt =
       codeIteration === 1
         ? PROMPTS.CODE_REVIEW(currentPlan, gitDiff)
-        : PROMPTS.CODE_REVIEW_CONTINUATION(
-            formatConcerns(lastCodeJudgment!),
-            currentPlan,
-            gitDiff,
-          );
+        : reviewer.hasCodeReviewSession()
+          ? PROMPTS.CODE_REVIEW_CONTINUATION_SLIM(formatConcerns(lastCodeJudgment!), gitDiff)
+          : PROMPTS.CODE_REVIEW_CONTINUATION(
+              formatConcerns(lastCodeJudgment!),
+              currentPlan,
+              gitDiff,
+            );
 
     const codeReviewResult = await runWithProgress(canStreamReviewer, "コードレビュー中...", () =>
       reviewer.reviewCode(

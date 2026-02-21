@@ -60,6 +60,10 @@ export class GeneratorImpl implements Generator {
     return { response: result.response, raw: result.raw };
   }
 
+  hasActiveSession(): boolean {
+    return this.sessionId !== null;
+  }
+
   /**
    * セッション ID 未取得なら毎回抽出を試行。
    * - requireSessionId=true (Claude): 初回抽出失敗で例外

@@ -8,6 +8,7 @@ export interface ProviderResult {
 export interface Generator {
   generatePlan(prompt: string): Promise<ProviderResult>;
   generateCode(prompt: string): Promise<ProviderResult>;
+  hasActiveSession(): boolean;
 }
 
 export interface Reviewer {
@@ -19,6 +20,8 @@ export interface Reviewer {
     prompt: string,
     fallbackContext?: { diffSummary: string; reviewSummary: string },
   ): Promise<ProviderResult>;
+  hasPlanSession(): boolean;
+  hasCodeReviewSession(): boolean;
 }
 
 export interface Judge {

@@ -22,6 +22,14 @@ export class ReviewerImpl implements Reviewer {
     this.codeSandboxMode = options.sandboxMode ?? "workspace-write";
   }
 
+  hasPlanSession(): boolean {
+    return this.planSessionId !== null;
+  }
+
+  hasCodeReviewSession(): boolean {
+    return this.codeReviewSessionId !== null;
+  }
+
   async reviewPlan(
     prompt: string,
     fallbackContext?: { planSummary: string; reviewSummary: string },
