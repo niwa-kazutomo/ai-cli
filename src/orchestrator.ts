@@ -1,5 +1,5 @@
 import { createProviders, validateProviderCapabilities, checkClaudeStreamingCapability } from "./providers/factory.js";
-import type { Generator, Reviewer, Judge } from "./providers/types.js";
+import type { Generator, Reviewer, Judge, ProviderResult } from "./providers/types.js";
 import { checkGitRepo, checkGitChanges, getGitDiff } from "./git-utils.js";
 import * as ui from "./user-interaction.js";
 import { PROMPTS, MESSAGES } from "./constants.js";
@@ -414,7 +414,7 @@ export async function runWorkflow(options: OrchestratorOptions): Promise<void> {
     const prevDiffSummary = lastCodeDiffSummary;
     lastCodeDiffSummary = gitDiff.slice(0, 500);
 
-    const codeReviewPrompt =
+    const codeReviewPrompt: string =
       codeIteration === 1
         ? PROMPTS.CODE_REVIEW(currentPlan, gitDiff)
         : reviewer.hasCodeReviewSession()
@@ -425,7 +425,7 @@ export async function runWorkflow(options: OrchestratorOptions): Promise<void> {
               gitDiff,
             );
 
-    const codeReviewResult = await runWithProgress(canStreamReviewer, "コードレビュー中...", () =>
+    const codeReviewResult: ProviderResult = await runWithProgress(canStreamReviewer, "コードレビュー中...", () =>
       reviewer.reviewCode(
         codeReviewPrompt,
         codeIteration > 1
@@ -436,13 +436,13 @@ export async function runWorkflow(options: OrchestratorOptions): Promise<void> {
           : undefined,
       ),
     );
-    const codeReviewOutput = codeReviewResult.response;
+    const codeReviewOutput: string = codeReviewResult.response;
     codeReviewSummary = codeReviewOutput.slice(0, 500);
     logger.verbose("コードレビュー結果", codeReviewOutput);
 
     // Step 5.5: Judge code review
     ui.display("⚖️ Step 5.5: コードレビュー判定中...");
-    const codeJudgment = await runWithProgress(shouldStream, "コードレビュー判定中...", () =>
+    const codeJudgment: ReviewJudgment = await runWithProgress(shouldStream, "コードレビュー判定中...", () =>
       judge.judgeReview(codeReviewOutput),
     );
     lastCodeJudgment = codeJudgment;
