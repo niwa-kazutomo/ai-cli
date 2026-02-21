@@ -1,7 +1,7 @@
-import { runCli } from "../cli-runner.js";
 import { PROMPTS } from "../constants.js";
 import type { ReviewJudgment } from "../types.js";
 import type { Judge } from "./types.js";
+import type { CliBackend, BackendRunResult } from "./backend.js";
 import {
   extractConcernsFromText,
   extractSummaryFromText,
@@ -13,54 +13,46 @@ import {
 } from "../review-judge.js";
 import * as logger from "../logger.js";
 
-export interface ClaudeCodeJudgeConfig {
-  cwd: string;
-  model?: string;
-  onStdout?: (chunk: string) => void;
-  onStderr?: (chunk: string) => void;
-}
+export class JudgeImpl implements Judge {
+  private readonly backend: CliBackend;
 
-export class ClaudeCodeJudge implements Judge {
-  private readonly config: ClaudeCodeJudgeConfig;
-
-  constructor(config: ClaudeCodeJudgeConfig) {
-    this.config = config;
+  constructor(backend: CliBackend) {
+    this.backend = backend;
   }
 
   async judgeReview(reviewOutput: string): Promise<ReviewJudgment> {
     const prompt = PROMPTS.REVIEW_JUDGMENT(reviewOutput);
 
-    const args = ["--print", "--no-session-persistence"];
-
-    if (this.config.model) {
-      args.push("--model", this.config.model);
-    }
-
-    args.push(prompt);
-
-    let result;
+    // fail-safe 1: backend.run() 例外 → 安全側
+    let result: BackendRunResult;
     try {
-      result = await runCli("claude", {
-        args,
-        cwd: this.config.cwd,
-        onStdout: this.config.onStdout,
-        onStderr: this.config.onStderr,
+      result = await this.backend.run({
+        prompt,
+        resumeSessionId: null,
+        hints: { operation: "judge", noSessionPersistence: true, sandboxMode: "read-only" },
       });
     } catch (err) {
       logger.error(`レビュー判定の実行に失敗しました: ${err}`);
       return createFailSafeJudgment();
     }
 
-    if (result.exitCode !== 0) {
+    // fail-safe 2: 非ゼロ終了 → 安全側
+    if (result.raw.exitCode !== 0) {
       logger.error(
-        `レビュー判定が非ゼロで終了しました (exit code: ${result.exitCode})`,
+        `レビュー判定が非ゼロで終了しました (exit code: ${result.raw.exitCode})`,
       );
       return createFailSafeJudgment();
     }
 
-    const text = result.stdout;
+    // fail-safe 3: レスポンス抽出失敗（Codex: agent_message 未検出等）→ 安全側
+    if (!result.extractionSucceeded) {
+      logger.warn("レスポンス抽出失敗。安全側にフォールバック。");
+      return createFailSafeJudgment();
+    }
 
-    // 優先5: stdout が空
+    const text = result.response;
+
+    // fail-safe 4: 空レスポンス → 安全側
     if (!text.trim()) {
       logger.warn("レビュー判定の出力が空です。安全側に倒します。");
       return createFailSafeJudgment();

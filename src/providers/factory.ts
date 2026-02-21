@@ -1,12 +1,12 @@
 import { checkCapabilities } from "../cli-runner.js";
 import type { CliChoice, CodexSandboxMode } from "../types.js";
 import type { Generator, Reviewer, Judge } from "./types.js";
-import { ClaudeCodeGenerator } from "./claude-code-generator.js";
-import { CodexReviewer } from "./codex-reviewer.js";
-import { ClaudeCodeJudge } from "./claude-code-judge.js";
-import { CodexGenerator } from "./codex-generator.js";
-import { ClaudeCodeReviewer } from "./claude-code-reviewer.js";
-import { CodexJudge } from "./codex-judge.js";
+import type { CliBackend } from "./backend.js";
+import { ClaudeCliBackend } from "./claude-backend.js";
+import { CodexCliBackend } from "./codex-backend.js";
+import { GeneratorImpl } from "./generator-impl.js";
+import { ReviewerImpl } from "./reviewer-impl.js";
+import { JudgeImpl } from "./judge-impl.js";
 
 export interface ProviderConfig {
   cwd: string;
@@ -34,68 +34,46 @@ export function createProviders(config: ProviderConfig): Providers {
   const revCli = config.reviewerCli ?? "codex";
   const judCli = config.judgeCli ?? "claude";
 
-  const canStream = config.streaming && config.canStreamClaude;
+  const canStreamClaude = config.streaming && config.canStreamClaude;
 
-  // Generator
-  let generator: Generator;
-  if (genCli === "codex") {
-    generator = new CodexGenerator({
-      cwd: config.cwd,
-      model: config.codexModel,
-      dangerous: config.dangerous,
-      streaming: config.streaming,
-      onStdout: config.onStdout,
-      onStderr: config.onStderr,
-    });
-  } else {
-    generator = new ClaudeCodeGenerator({
+  // ロールごとに独立したバックエンドインスタンスを生成（セッション汚染防止）
+  function createBackend(cli: CliChoice, forRole: "generator" | "reviewer" | "judge"): CliBackend {
+    // Judge は Claude/Codex とも streaming: false 固定
+    const isJudge = forRole === "judge";
+
+    if (cli === "codex") {
+      return new CodexCliBackend({
+        cwd: config.cwd,
+        model: config.codexModel,
+        streaming: isJudge ? false : config.streaming,
+        onStdout: config.onStdout,
+        onStderr: config.onStderr,
+      });
+    }
+    // Claude: streaming は canStreamClaude で制御
+    const streaming = isJudge ? false : canStreamClaude;
+    return new ClaudeCliBackend({
       cwd: config.cwd,
       model: config.claudeModel,
-      dangerous: config.dangerous,
-      streaming: canStream,
-      onStdout: canStream ? config.onStdout : undefined,
+      streaming: streaming || undefined,
+      onStdout: (streaming || isJudge) ? config.onStdout : undefined,
       onStderr: config.onStderr,
     });
   }
 
-  // Reviewer
-  let reviewer: Reviewer;
-  if (revCli === "claude") {
-    reviewer = new ClaudeCodeReviewer({
-      cwd: config.cwd,
-      model: config.claudeModel,
-      streaming: canStream,
-      onStdout: canStream ? config.onStdout : undefined,
-      onStderr: config.onStderr,
-    });
-  } else {
-    reviewer = new CodexReviewer({
-      cwd: config.cwd,
-      model: config.codexModel,
-      sandbox: config.codexSandbox,
-      streaming: config.streaming,
-      onStdout: config.onStdout,
-      onStderr: config.onStderr,
-    });
-  }
+  const generator = new GeneratorImpl(
+    createBackend(genCli, "generator"),
+    { dangerous: config.dangerous, requireSessionId: genCli === "claude" },
+  );
 
-  // Judge
-  let judge: Judge;
-  if (judCli === "codex") {
-    judge = new CodexJudge({
-      cwd: config.cwd,
-      model: config.codexModel,
-      onStdout: config.onStdout,
-      onStderr: config.onStderr,
-    });
-  } else {
-    judge = new ClaudeCodeJudge({
-      cwd: config.cwd,
-      model: config.claudeModel,
-      onStdout: config.onStdout,
-      onStderr: config.onStderr,
-    });
-  }
+  const reviewer = new ReviewerImpl(
+    createBackend(revCli, "reviewer"),
+    { sandboxMode: config.codexSandbox },
+  );
+
+  const judge = new JudgeImpl(
+    createBackend(judCli, "judge"),
+  );
 
   return { generator, reviewer, judge };
 }

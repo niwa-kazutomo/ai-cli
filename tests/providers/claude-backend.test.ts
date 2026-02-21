@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { ClaudeCodeGenerator, extractResponse, extractSessionId } from "../../src/providers/claude-code-generator.js";
+import { ClaudeCliBackend, extractResponse, extractSessionId } from "../../src/providers/claude-backend.js";
 
 vi.mock("../../src/logger.js", () => ({
   error: vi.fn(),
@@ -80,103 +80,193 @@ describe("extractSessionId", () => {
   });
 });
 
-describe("ClaudeCodeGenerator セッション管理", () => {
+describe("ClaudeCliBackend 引数構築", () => {
   beforeEach(() => {
     vi.clearAllMocks();
   });
 
-  it("初回 generatePlan で --session-id が引数に含まれない", async () => {
+  it("generatePlan で --print --output-format json が渡される", async () => {
     mockRunCli.mockResolvedValue({
       exitCode: 0,
-      stdout: JSON.stringify({ session_id: "new-sess-id", result: "plan" }),
+      stdout: JSON.stringify({ session_id: "sess-1", result: "plan" }),
       stderr: "",
     });
 
-    const generator = new ClaudeCodeGenerator({ cwd: "/tmp" });
-    await generator.generatePlan("test prompt");
+    const backend = new ClaudeCliBackend({ cwd: "/tmp" });
+    await backend.run({
+      prompt: "test",
+      resumeSessionId: null,
+      hints: { operation: "generatePlan" },
+    });
 
-    const calledArgs = mockRunCli.mock.calls[0][1].args as string[];
-    expect(calledArgs).not.toContain("--session-id");
+    const args = mockRunCli.mock.calls[0][1].args as string[];
+    expect(args).toContain("--print");
+    expect(args).toContain("--output-format");
+    expect(args).toContain("json");
+    expect(args).not.toContain("--permission-mode");
   });
 
-  it("初回レスポンスから session_id を保存し、2回目で --resume を使う", async () => {
+  it("generateCode (dangerous=false) で --permission-mode acceptEdits が渡される", async () => {
     mockRunCli.mockResolvedValue({
       exitCode: 0,
-      stdout: JSON.stringify({ session_id: "new-sess-id", result: "plan" }),
+      stdout: JSON.stringify({ session_id: "sess-1", result: "code" }),
       stderr: "",
     });
 
-    const generator = new ClaudeCodeGenerator({ cwd: "/tmp" });
-    await generator.generatePlan("test prompt");
-
-    mockRunCli.mockResolvedValue({
-      exitCode: 0,
-      stdout: JSON.stringify({ session_id: "new-sess-id", result: "revised plan" }),
-      stderr: "",
+    const backend = new ClaudeCliBackend({ cwd: "/tmp" });
+    await backend.run({
+      prompt: "test",
+      resumeSessionId: null,
+      hints: { operation: "generateCode", dangerous: false },
     });
 
-    await generator.generatePlan("revision prompt");
-
-    const secondArgs = mockRunCli.mock.calls[1][1].args as string[];
-    expect(secondArgs).toContain("--resume");
-    expect(secondArgs).toContain("new-sess-id");
+    const args = mockRunCli.mock.calls[0][1].args as string[];
+    expect(args).toContain("--permission-mode");
+    expect(args).toContain("acceptEdits");
+    expect(args).not.toContain("--dangerously-skip-permissions");
   });
 
-  it("session_id 抽出失敗時にエラーで停止する", async () => {
+  it("generateCode (dangerous=true) で --dangerously-skip-permissions が渡される", async () => {
     mockRunCli.mockResolvedValue({
       exitCode: 0,
-      stdout: JSON.stringify({ result: "plan without session_id" }),
+      stdout: JSON.stringify({ session_id: "sess-1", result: "code" }),
       stderr: "",
     });
 
-    const generator = new ClaudeCodeGenerator({ cwd: "/tmp" });
-    await expect(generator.generatePlan("test")).rejects.toThrow("session_id");
-  });
-
-  it("exit code 非ゼロ時にエラーを投げる", async () => {
-    mockRunCli.mockResolvedValue({
-      exitCode: 1,
-      stdout: "",
-      stderr: "error",
+    const backend = new ClaudeCliBackend({ cwd: "/tmp" });
+    await backend.run({
+      prompt: "test",
+      resumeSessionId: null,
+      hints: { operation: "generateCode", dangerous: true },
     });
 
-    const generator = new ClaudeCodeGenerator({ cwd: "/tmp" });
-    await expect(generator.generatePlan("test")).rejects.toThrow("プラン生成が失敗しました");
+    const args = mockRunCli.mock.calls[0][1].args as string[];
+    expect(args).toContain("--dangerously-skip-permissions");
+    expect(args).not.toContain("--permission-mode");
   });
 
-  it("firstRun=false かつ sessionId=null の場合にエラー", async () => {
-    // 初回で session_id 抽出失敗 → firstRun は true のまま
-    // ここでは直接 2 回目呼び出しをシミュレートするため、
-    // 1 回目で session_id 取得成功後、内部状態を壊すことは不可能なので
-    // 別のアプローチでテスト
-
-    // session_id なしで初回が失敗する → firstRun は true のまま
+  it("judge で --no-session-persistence が渡され、--output-format json は付かない", async () => {
     mockRunCli.mockResolvedValue({
       exitCode: 0,
-      stdout: JSON.stringify({ result: "no session" }),
+      stdout: "plain text",
       stderr: "",
     });
 
-    const generator = new ClaudeCodeGenerator({ cwd: "/tmp" });
-    await expect(generator.generatePlan("test")).rejects.toThrow("session_id");
+    const backend = new ClaudeCliBackend({ cwd: "/tmp" });
+    await backend.run({
+      prompt: "test",
+      resumeSessionId: null,
+      hints: { operation: "judge" },
+    });
+
+    const args = mockRunCli.mock.calls[0][1].args as string[];
+    expect(args).toContain("--print");
+    expect(args).toContain("--no-session-persistence");
+    expect(args).not.toContain("--output-format");
   });
 
-  it("generatePlan で --permission-mode が引数に含まれない", async () => {
+  it("resumeSessionId で --resume が渡される", async () => {
     mockRunCli.mockResolvedValue({
       exitCode: 0,
-      stdout: JSON.stringify({ session_id: "new-sess-id", result: "plan" }),
+      stdout: JSON.stringify({ result: "resumed" }),
       stderr: "",
     });
 
-    const generator = new ClaudeCodeGenerator({ cwd: "/tmp" });
-    await generator.generatePlan("test prompt");
+    const backend = new ClaudeCliBackend({ cwd: "/tmp" });
+    await backend.run({
+      prompt: "test",
+      resumeSessionId: "sess-abc",
+      hints: { operation: "generatePlan" },
+    });
 
-    const calledArgs = mockRunCli.mock.calls[0][1].args as string[];
-    expect(calledArgs).not.toContain("--permission-mode");
+    const args = mockRunCli.mock.calls[0][1].args as string[];
+    expect(args).toContain("--resume");
+    expect(args).toContain("sess-abc");
+  });
+
+  it("model で --model が渡される", async () => {
+    mockRunCli.mockResolvedValue({
+      exitCode: 0,
+      stdout: JSON.stringify({ session_id: "sess-1", result: "plan" }),
+      stderr: "",
+    });
+
+    const backend = new ClaudeCliBackend({ cwd: "/tmp", model: "claude-sonnet-4-20250514" });
+    await backend.run({
+      prompt: "test",
+      resumeSessionId: null,
+      hints: { operation: "generatePlan" },
+    });
+
+    const args = mockRunCli.mock.calls[0][1].args as string[];
+    expect(args).toContain("--model");
+    expect(args).toContain("claude-sonnet-4-20250514");
   });
 });
 
-describe("ClaudeCodeGenerator ストリーミング", () => {
+describe("ClaudeCliBackend レスポンス抽出", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it("JSON レスポンスから response と sessionId を正しく抽出する", async () => {
+    mockRunCli.mockResolvedValue({
+      exitCode: 0,
+      stdout: JSON.stringify({ session_id: "sess-123", result: "plan output" }),
+      stderr: "",
+    });
+
+    const backend = new ClaudeCliBackend({ cwd: "/tmp" });
+    const result = await backend.run({
+      prompt: "test",
+      resumeSessionId: null,
+      hints: { operation: "generatePlan" },
+    });
+
+    expect(result.response).toBe("plan output");
+    expect(result.sessionId).toBe("sess-123");
+    expect(result.extractionSucceeded).toBe(true);
+  });
+
+  it("judge はプレーンテキストを返し extractionSucceeded=true", async () => {
+    mockRunCli.mockResolvedValue({
+      exitCode: 0,
+      stdout: "懸念事項なし",
+      stderr: "",
+    });
+
+    const backend = new ClaudeCliBackend({ cwd: "/tmp" });
+    const result = await backend.run({
+      prompt: "test",
+      resumeSessionId: null,
+      hints: { operation: "judge" },
+    });
+
+    expect(result.response).toBe("懸念事項なし");
+    expect(result.sessionId).toBeNull();
+    expect(result.extractionSucceeded).toBe(true);
+  });
+
+  it("JSON パース失敗時に extractionSucceeded=false", async () => {
+    mockRunCli.mockResolvedValue({
+      exitCode: 0,
+      stdout: "not json at all",
+      stderr: "",
+    });
+
+    const backend = new ClaudeCliBackend({ cwd: "/tmp" });
+    const result = await backend.run({
+      prompt: "test",
+      resumeSessionId: null,
+      hints: { operation: "generatePlan" },
+    });
+
+    expect(result.response).toBe("not json at all");
+    expect(result.extractionSucceeded).toBe(false);
+  });
+});
+
+describe("ClaudeCliBackend ストリーミング", () => {
   beforeEach(() => {
     vi.clearAllMocks();
   });
@@ -193,8 +283,12 @@ describe("ClaudeCodeGenerator ストリーミング", () => {
       return { exitCode: 0, stdout: "", stderr: "" };
     });
 
-    const generator = new ClaudeCodeGenerator({ cwd: "/tmp", streaming: true });
-    await generator.generatePlan("test");
+    const backend = new ClaudeCliBackend({ cwd: "/tmp", streaming: true });
+    await backend.run({
+      prompt: "test",
+      resumeSessionId: null,
+      hints: { operation: "generatePlan" },
+    });
 
     const calledArgs = mockRunCli.mock.calls[0][1].args as string[];
     expect(calledArgs).toContain("stream-json");
@@ -210,8 +304,12 @@ describe("ClaudeCodeGenerator ストリーミング", () => {
       stderr: "",
     });
 
-    const generator = new ClaudeCodeGenerator({ cwd: "/tmp", streaming: false });
-    await generator.generatePlan("test");
+    const backend = new ClaudeCliBackend({ cwd: "/tmp", streaming: false });
+    await backend.run({
+      prompt: "test",
+      resumeSessionId: null,
+      hints: { operation: "generatePlan" },
+    });
 
     const calledArgs = mockRunCli.mock.calls[0][1].args as string[];
     expect(calledArgs).toContain("json");
@@ -232,10 +330,16 @@ describe("ClaudeCodeGenerator ストリーミング", () => {
       return { exitCode: 0, stdout: "", stderr: "" };
     });
 
-    const generator = new ClaudeCodeGenerator({ cwd: "/tmp", streaming: true });
-    const result = await generator.generatePlan("test");
+    const backend = new ClaudeCliBackend({ cwd: "/tmp", streaming: true });
+    const result = await backend.run({
+      prompt: "test",
+      resumeSessionId: null,
+      hints: { operation: "generatePlan" },
+    });
 
     expect(result.response).toBe("final response text");
+    expect(result.sessionId).toBe("stream-sess-abc");
+    expect(result.extractionSucceeded).toBe(true);
   });
 
   it("onStdout が差分テキストのみ受け取る（重複表示防止）", async () => {
@@ -254,12 +358,16 @@ describe("ClaudeCodeGenerator ストリーミング", () => {
       return { exitCode: 0, stdout: "", stderr: "" };
     });
 
-    const generator = new ClaudeCodeGenerator({
+    const backend = new ClaudeCliBackend({
       cwd: "/tmp",
       streaming: true,
       onStdout: (chunk: string) => receivedChunks.push(chunk),
     });
-    await generator.generatePlan("test");
+    await backend.run({
+      prompt: "test",
+      resumeSessionId: null,
+      hints: { operation: "generatePlan" },
+    });
 
     expect(receivedChunks).toEqual(["Hello", " World", "\n"]);
   });
@@ -280,12 +388,16 @@ describe("ClaudeCodeGenerator ストリーミング", () => {
       return { exitCode: 0, stdout: "", stderr: "" };
     });
 
-    const generator = new ClaudeCodeGenerator({
+    const backend = new ClaudeCliBackend({
       cwd: "/tmp",
       streaming: true,
       onStdout: (chunk: string) => receivedChunks.push(chunk),
     });
-    await generator.generatePlan("test");
+    await backend.run({
+      prompt: "test",
+      resumeSessionId: null,
+      hints: { operation: "generatePlan" },
+    });
 
     expect(receivedChunks).toEqual(["Long text here", "\n", "Short", "\n"]);
   });
@@ -305,8 +417,12 @@ describe("ClaudeCodeGenerator ストリーミング", () => {
       return { exitCode: 0, stdout: "", stderr: "" };
     });
 
-    const generator = new ClaudeCodeGenerator({ cwd: "/tmp", streaming: true });
-    const result = await generator.generatePlan("test");
+    const backend = new ClaudeCliBackend({ cwd: "/tmp", streaming: true });
+    const result = await backend.run({
+      prompt: "test",
+      resumeSessionId: null,
+      hints: { operation: "generatePlan" },
+    });
 
     expect(result.response).toContain("# Full Plan");
     expect(result.response).toContain("Step 1: Do X");
@@ -314,54 +430,41 @@ describe("ClaudeCodeGenerator ストリーミング", () => {
   });
 });
 
-describe("ClaudeCodeGenerator 権限引数", () => {
-  beforeEach(() => {
-    vi.clearAllMocks();
+describe("ClaudeCliBackend.getRequiredFlags", () => {
+  it("generatePlan では --permission-mode を要求しない", () => {
+    const flags = ClaudeCliBackend.getRequiredFlags(
+      [{ operation: "generatePlan" }],
+      false,
+    );
+    expect(flags).toContain("--print");
+    expect(flags).toContain("--output-format");
+    expect(flags).toContain("--resume");
+    expect(flags).not.toContain("--permission-mode");
   });
 
-  it("generateCode (dangerous=false) で --permission-mode acceptEdits が渡される", async () => {
-    mockRunCli.mockResolvedValue({
-      exitCode: 0,
-      stdout: JSON.stringify({ session_id: "sess-1", result: "code" }),
-      stderr: "",
-    });
-
-    const generator = new ClaudeCodeGenerator({ cwd: "/tmp" });
-    // 初回で session_id を取得するため、先に generatePlan を呼ぶ
-    await generator.generatePlan("init");
-
-    mockRunCli.mockResolvedValue({
-      exitCode: 0,
-      stdout: JSON.stringify({ result: "code" }),
-      stderr: "",
-    });
-    await generator.generateCode("test");
-
-    const calledArgs = mockRunCli.mock.calls[1][1].args as string[];
-    expect(calledArgs).toContain("--permission-mode");
-    expect(calledArgs).toContain("acceptEdits");
-    expect(calledArgs).not.toContain("--dangerously-skip-permissions");
+  it("generateCode (dangerous=false) で --permission-mode を要求する", () => {
+    const flags = ClaudeCliBackend.getRequiredFlags(
+      [{ operation: "generateCode" }],
+      false,
+    );
+    expect(flags).toContain("--permission-mode");
+    expect(flags).not.toContain("--dangerously-skip-permissions");
   });
 
-  it("generateCode (dangerous=true) で --dangerously-skip-permissions が渡される", async () => {
-    mockRunCli.mockResolvedValue({
-      exitCode: 0,
-      stdout: JSON.stringify({ session_id: "sess-1", result: "code" }),
-      stderr: "",
-    });
+  it("generateCode (dangerous=true) で --dangerously-skip-permissions を要求する", () => {
+    const flags = ClaudeCliBackend.getRequiredFlags(
+      [{ operation: "generateCode" }],
+      true,
+    );
+    expect(flags).toContain("--dangerously-skip-permissions");
+  });
 
-    const generator = new ClaudeCodeGenerator({ cwd: "/tmp", dangerous: true });
-    await generator.generatePlan("init");
-
-    mockRunCli.mockResolvedValue({
-      exitCode: 0,
-      stdout: JSON.stringify({ result: "code" }),
-      stderr: "",
-    });
-    await generator.generateCode("test");
-
-    const calledArgs = mockRunCli.mock.calls[1][1].args as string[];
-    expect(calledArgs).toContain("--dangerously-skip-permissions");
-    expect(calledArgs).not.toContain("--permission-mode");
+  it("judge で --no-session-persistence を要求する", () => {
+    const flags = ClaudeCliBackend.getRequiredFlags(
+      [{ operation: "judge" }],
+      false,
+    );
+    expect(flags).toContain("--no-session-persistence");
+    expect(flags).not.toContain("--output-format");
   });
 });

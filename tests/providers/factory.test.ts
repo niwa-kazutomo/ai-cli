@@ -257,7 +257,7 @@ describe("createProviders", () => {
     expect(mockRunCli.mock.calls[0][1].onStdout).toBeDefined();
   });
 
-  it("codexSandbox が CodexReviewer の config に伝搬する", async () => {
+  it("codexSandbox が Reviewer に伝搬する", async () => {
     const { runCli } = await import("../../src/cli-runner.js");
     const mockRunCli = vi.mocked(runCli);
 
@@ -280,7 +280,7 @@ describe("createProviders", () => {
     expect(callArgs).toContain("danger-full-access");
   });
 
-  it("generatorCli: 'codex' で CodexGenerator インスタンスが生成される", async () => {
+  it("generatorCli: 'codex' で Codex バックエンドが使用される", async () => {
     const { runCli } = await import("../../src/cli-runner.js");
     const mockRunCli = vi.mocked(runCli);
 
@@ -332,7 +332,7 @@ describe("createProviders", () => {
     expect(callArgs).not.toContain("claude-model");
   });
 
-  it("reviewerCli: 'claude' で ClaudeCodeReviewer インスタンスが生成される", async () => {
+  it("reviewerCli: 'claude' で Claude バックエンドが使用される", async () => {
     const { runCli } = await import("../../src/cli-runner.js");
     const mockRunCli = vi.mocked(runCli);
 
@@ -353,7 +353,7 @@ describe("createProviders", () => {
     expect(mockRunCli.mock.calls[0][0]).toBe("claude");
   });
 
-  it("judgeCli: 'codex' で CodexJudge インスタンスが生成される", async () => {
+  it("judgeCli: 'codex' で Codex バックエンドが使用される", async () => {
     const { runCli } = await import("../../src/cli-runner.js");
     const mockRunCli = vi.mocked(runCli);
 
@@ -399,13 +399,13 @@ describe("createProviders", () => {
 
     await providers.generator.generatePlan("test");
 
-    // CodexGenerator は codexSandbox を使わず、自身の sandboxMode (workspace-write) を使う
+    // Generator は codexSandbox を使わず、自身の sandbox (workspace-write) を使う
     const callArgs = mockRunCli.mock.calls[0][1].args as string[];
     expect(callArgs).toContain("workspace-write");
     expect(callArgs).not.toContain("read-only");
   });
 
-  it("dangerous=true で CodexGenerator の sandbox が danger-full-access になる", async () => {
+  it("dangerous=true で Codex Generator の sandbox が danger-full-access になる", async () => {
     const { runCli } = await import("../../src/cli-runner.js");
     const mockRunCli = vi.mocked(runCli);
 
