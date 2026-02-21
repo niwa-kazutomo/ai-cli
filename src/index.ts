@@ -14,7 +14,7 @@ import {
 import { CODEX_SANDBOX_MODES, CLI_CHOICES } from "./types.js";
 import type { ReplOptions, CodexSandboxMode, CliChoice } from "./types.js";
 
-const VERSION = "0.1.0";
+const VERSION = "0.1.1";
 
 function buildWorkflowOptions(opts: Record<string, unknown>): ReplOptions {
   return {
